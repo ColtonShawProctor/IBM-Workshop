@@ -1,0 +1,650 @@
+======================================================================
+  PBS LAYER OUTPUT ANALYZER v2 (Fresh Optimizer Run)
+  Bid Period: Test Bid 2 (ORD, January 2026)
+  Analysis: 2026-03-29 16:56
+======================================================================
+Loading data...
+  40 entries across 7 layers
+  1705 sequences in pool
+
+
+======================================================================
+  LAYER 1: Dream Schedule — Compact + Quality
+======================================================================
+
+  Sequences selected: 3
+    SEQ   663: days  8-11 (4d) | TPAY 29.6h | NRT, LAS | ORD 777 INTL
+    SEQ   664: days  1- 4 (4d) | TPAY 29.4h | NRT, LAS | ORD 777 INTL
+    SEQ   672: days  5- 6 (2d) | TPAY 16.6h | turn | ORD 787 INTL
+
+  --- Date Conflict Check ---
+  PASS: No conflicts
+
+  --- Rest Period Check ---
+    SEQ 664 (d4) -> SEQ 672 (d5): OK (29.1h)
+    SEQ 672 (d6) -> SEQ 663 (d8): OK (gap)
+  PASS
+
+  --- Credit Hour Range ---
+  Total: 75.5h (4532 min) | Range: 70-90h
+  PASS
+
+  --- Days Off ---
+  Working: 10 | Off: 20 | Min: 11
+  PASS
+
+  --- 7-Day Block Limit (30h) ---
+  Worst window: 38.3h (days 5-11) | Limit: 40.0h
+  PASS
+
+  --- Multi-OPS: PASS ---
+
+  LEGALITY: PASS
+
+  --- Schedule Shape ---
+  Span: days 1-11 (11d) [EXCELLENT]
+  Blocks: 2 | Internal gaps: 1d [GOOD]
+  Largest off: 19d (days 12-30) [EXCELLENT]
+
+  Layer 1: "Dream Schedule — Compact + Quality"
+  Credit: 75.5h | Span: 1-11 | Off: 19d
+
+    Mon  Tue  Wed  Thu  Fri  Sat  Sun
+                    1▓▓  2▓▓  3▓▓  4▓▓ 
+     5▓▓  6▓▓  7    8▓▓  9▓▓ 10▓▓ 11▓▓ 
+    12   13   14   15   16   17   18   
+    19   20   21   22   23   24   25   
+    26   27   28   29   30   
+
+    SEQ-663 d8-11 (4d, 29.6h, NRT->LAS)
+    SEQ-664 d1-4 (4d, 29.4h, NRT->LAS)
+    SEQ-672 d5-6 (2d, 16.6h, turn)
+
+  --- Commutability (DCA commuter) ---
+  Block 1 (d1-6): report 14:26 [EXCELLENT], release 15:55 [GOOD], buffers 0/24d -> 76/100
+  Block 2 (d8-11): report 13:50 [EXCELLENT], release 13:58 [EXCELLENT], buffers 7/19d -> 100/100
+  Overall: 88/100
+
+  --- Trip Quality ---
+  Credit/day: 453min (7.6h) | Pool avg: 336min (5.6h)
+    NRT (100/100): 24.2h
+    LAS (75/100): 18.8h
+    NRT (100/100): 23.2h
+    LAS (75/100): 18.1h
+  Legs/day: 1.0 | Heavy days (4+): 0
+  Mix: 1x2d, 2x4d
+  Deadheads: 4/10 (40%)
+  Quality Score: 82/100
+
+======================================================================
+  LAYER 2: Flip Window — Back Half
+======================================================================
+
+  Sequences selected: 4
+    SEQ   671: days 16-17 (2d) | TPAY 16.7h | turn | ORD 787 INTL
+    SEQ   675: days 14-15 (2d) | TPAY 16.5h | turn | ORD 787 INTL
+    SEQ   674: days  5- 6 (2d) | TPAY 16.6h | turn | ORD 787 INTL
+    SEQ   663: days  7-10 (4d) | TPAY 29.6h | NRT, LAS | ORD 777 INTL
+
+  --- Date Conflict Check ---
+  PASS: No conflicts
+
+  --- Rest Period Check ---
+    SEQ 674 (d6) -> SEQ 663 (d7): OK (20.3h)
+    SEQ 663 (d10) -> SEQ 675 (d14): OK (gap)
+    SEQ 675 (d15) -> SEQ 671 (d16): OK (23.7h)
+  PASS
+
+  --- Credit Hour Range ---
+  Total: 79.3h (4761 min) | Range: 70-90h
+  PASS
+
+  --- Days Off ---
+  Working: 10 | Off: 20 | Min: 11
+  PASS
+
+  --- 7-Day Block Limit (30h) ---
+  Worst window: 38.3h (days 4-10) | Limit: 40.0h
+  PASS
+
+  --- Multi-OPS: PASS ---
+
+  LEGALITY: PASS
+
+  --- Schedule Shape ---
+  Span: days 5-17 (13d) [EXCELLENT]
+  Blocks: 2 | Internal gaps: 3d [FAIR]
+  Largest off: 13d (days 18-30) [EXCELLENT]
+
+  Layer 2: "Flip Window — Back Half"
+  Credit: 79.3h | Span: 5-17 | Off: 13d
+
+    Mon  Tue  Wed  Thu  Fri  Sat  Sun
+                    1    2    3    4   
+     5▓▓  6▓▓  7▓▓  8▓▓  9▓▓ 10▓▓ 11   
+    12   13   14▓▓ 15▓▓ 16▓▓ 17▓▓ 18   
+    19   20   21   22   23   24   25   
+    26   27   28   29   30   
+
+    SEQ-671 d16-17 (2d, 16.7h, turn)
+    SEQ-675 d14-15 (2d, 16.5h, turn)
+    SEQ-674 d5-6 (2d, 16.6h, turn)
+    SEQ-663 d7-10 (4d, 29.6h, NRT->LAS)
+
+  --- Commutability (DCA commuter) ---
+  Block 1 (d5-10): report 19:25 [EXCELLENT], release 13:58 [EXCELLENT], buffers 4/20d -> 100/100
+  Block 2 (d14-17): report 19:30 [EXCELLENT], release 15:55 [GOOD], buffers 13/13d -> 91/100
+  Overall: 95/100
+
+  --- Trip Quality ---
+  Credit/day: 476min (7.9h) | Pool avg: 336min (5.6h)
+    NRT (100/100): 24.2h
+    LAS (75/100): 18.8h
+  Legs/day: 1.0 | Heavy days (4+): 0
+  Mix: 3x2d, 1x4d
+  Deadheads: 2/10 (20%)
+  Quality Score: 87/100
+
+======================================================================
+  LAYER 3: Maximum Pay
+======================================================================
+
+  Sequences selected: 6
+    SEQ 24030: days  2- 4 (3d) | TPAY 15.0h | MCO | ORD NBD DOM
+    SEQ 24164: days  5- 7 (3d) | TPAY 15.0h | SAN | ORD NBD DOM
+    SEQ 23812: days  8-10 (3d) | TPAY 15.0h | SFO | ORD NBD DOM
+    SEQ 23804: days 11-13 (3d) | TPAY 15.0h | LAX | ORD NBD DOM
+    SEQ 24547: days 14-16 (3d) | TPAY 15.0h | SFO | ORD NBD DOM
+    SEQ 24643: days 17-19 (3d) | TPAY 15.0h | PHX | ORD NBD DOM
+
+  --- Date Conflict Check ---
+  PASS: No conflicts
+
+  --- Rest Period Check ---
+    SEQ 24030 (d4) -> SEQ 24164 (d5): OK (15.2h)
+    SEQ 24164 (d7) -> SEQ 23812 (d8): OK (25.1h)
+    SEQ 23812 (d10) -> SEQ 23804 (d11): OK (23.8h)
+    SEQ 23804 (d13) -> SEQ 24547 (d14): OK (29.7h)
+    SEQ 24547 (d16) -> SEQ 24643 (d17): OK (15.1h)
+  PASS
+
+  --- Credit Hour Range ---
+  Total: 90.0h (5400 min) | Range: 70-90h
+  PASS (tight: -20.0h/+0.0h from bounds)
+
+  --- Days Off ---
+  Working: 18 | Off: 12 | Min: 11
+  PASS
+
+  --- 7-Day Block Limit (30h) ---
+  Worst window: 33.5h (days 10-16) | Limit: 40.0h
+  PASS
+
+  --- Multi-OPS: PASS ---
+
+  LEGALITY: PASS
+
+  --- Schedule Shape ---
+  Span: days 2-19 (18d) [GOOD]
+  Blocks: 1 | Internal gaps: 0d [PERFECT]
+  Largest off: 11d (days 20-30) [GOOD]
+
+  Layer 3: "Maximum Pay"
+  Credit: 90.0h | Span: 2-19 | Off: 11d
+
+    Mon  Tue  Wed  Thu  Fri  Sat  Sun
+                    1    2▓▓  3▓▓  4▓▓ 
+     5▓▓  6▓▓  7▓▓  8▓▓  9▓▓ 10▓▓ 11▓▓ 
+    12▓▓ 13▓▓ 14▓▓ 15▓▓ 16▓▓ 17▓▓ 18▓▓ 
+    19▓▓ 20   21   22   23   24   25   
+    26   27   28   29   30   
+
+    SEQ-24030 d2-4 (3d, 15.0h, MCO)
+    SEQ-24164 d5-7 (3d, 15.0h, SAN)
+    SEQ-23812 d8-10 (3d, 15.0h, SFO)
+    SEQ-23804 d11-13 (3d, 15.0h, LAX)
+    SEQ-24547 d14-16 (3d, 15.0h, SFO)
+    SEQ-24643 d17-19 (3d, 15.0h, PHX)
+
+  --- Commutability (DCA commuter) ---
+  Block 1 (d2-19): report 19:45 [EXCELLENT], release 11:15 [EXCELLENT], buffers 1/11d -> 92/100
+  Overall: 92/100
+
+  --- Trip Quality ---
+  Credit/day: 300min (5.0h) | Pool avg: 336min (5.6h)
+    MCO (70/100): 18.7h
+    SAN (88/100): 13.1h
+    SFO (88/100): 15.0h
+    LAX (85/100): 14.5h
+    SFO (88/100): 12.7h
+    PHX (72/100): 19.9h
+  Legs/day: 1.3 | Heavy days (4+): 1
+  Mix: 6x3d
+  Red-eye/ODAN: 1/0
+  Deadheads: 0/24 (0%)
+  Quality Score: 68/100
+
+======================================================================
+  LAYER 4: Quality of Life
+======================================================================
+
+  Sequences selected: 4
+    SEQ   678: days  2- 5 (4d) | TPAY 29.2h | NRT, LAS | ORD 777 INTL
+    SEQ 24298: days  8-11 (4d) | TPAY 20.0h | RDU, MIA | ORD NBD DOM
+    SEQ 24472: days 12-15 (4d) | TPAY 20.5h | SLC, PDX | ORD NBD DOM
+    SEQ  5325: days 16-19 (4d) | TPAY 20.0h | CLT, SJO | ORD NBI INTL
+
+  --- Date Conflict Check ---
+  PASS: No conflicts
+
+  --- Rest Period Check ---
+    SEQ 678 (d5) -> SEQ 24298 (d8): OK (gap)
+    SEQ 24298 (d11) -> SEQ 24472 (d12): OK (31.7h)
+    SEQ 24472 (d15) -> SEQ 5325 (d16): OK (28.0h)
+  PASS
+
+  --- Credit Hour Range ---
+  Total: 89.7h (5382 min) | Range: 70-90h
+  PASS (tight: -19.7h/+0.3h from bounds)
+
+  --- Days Off ---
+  Working: 16 | Off: 14 | Min: 11
+  PASS
+
+  --- 7-Day Block Limit (30h) ---
+  Worst window: 34.8h (days 12-18) | Limit: 40.0h
+  PASS
+
+  --- Multi-OPS: PASS ---
+
+  LEGALITY: PASS
+
+  --- Schedule Shape ---
+  Span: days 2-19 (18d) [GOOD]
+  Blocks: 2 | Internal gaps: 2d [GOOD]
+  Largest off: 11d (days 20-30) [GOOD]
+
+  Layer 4: "Quality of Life"
+  Credit: 89.7h | Span: 2-19 | Off: 11d
+
+    Mon  Tue  Wed  Thu  Fri  Sat  Sun
+                    1    2▓▓  3▓▓  4▓▓ 
+     5▓▓  6    7    8▓▓  9▓▓ 10▓▓ 11▓▓ 
+    12▓▓ 13▓▓ 14▓▓ 15▓▓ 16▓▓ 17▓▓ 18▓▓ 
+    19▓▓ 20   21   22   23   24   25   
+    26   27   28   29   30   
+
+    SEQ-678 d2-5 (4d, 29.2h, NRT->LAS)
+    SEQ-24298 d8-11 (4d, 20.0h, RDU->MIA)
+    SEQ-24472 d12-15 (4d, 20.5h, SLC->PDX)
+    SEQ-5325 d16-19 (4d, 20.0h, CLT->SJO)
+
+  --- Commutability (DCA commuter) ---
+  Block 1 (d2-5): report 14:26 [EXCELLENT], release 13:58 [EXCELLENT], buffers 1/25d -> 92/100
+  Block 2 (d8-19): report 11:15 [EXCELLENT], release 13:08 [EXCELLENT], buffers 7/11d -> 100/100
+  Overall: 96/100
+
+  --- Trip Quality ---
+  Credit/day: 336min (5.6h) | Pool avg: 336min (5.6h)
+    NRT (100/100): 23.2h
+    LAS (75/100): 20.1h
+    RDU (68/100): 13.4h
+    MIA (82/100): 19.4h
+    SLC (70/100): 11.2h SHORT
+    PDX (82/100): 15.4h
+    CLT (58/100): 12.5h
+    SJO (55/100): 17.0h
+  Legs/day: 1.2 | Heavy days (4+): 0
+  Mix: 4x4d
+  Deadheads: 2/19 (11%)
+  Quality Score: 72/100
+
+======================================================================
+  LAYER 5: Diverse Alternative A
+======================================================================
+
+  Sequences selected: 5
+    SEQ 23961: days  1- 3 (3d) | TPAY 20.9h | SFO | ORD NBD DOM
+    SEQ 24165: days  5- 7 (3d) | TPAY 19.9h | SFO | ORD NBD DOM
+    SEQ 24358: days  9-11 (3d) | TPAY 15.0h | LAX | ORD NBD DOM
+    SEQ 24461: days 12-14 (3d) | TPAY 15.0h | DEN | ORD NBD DOM
+    SEQ 24615: days 16-18 (3d) | TPAY 16.2h | SAN | ORD NBD DOM
+
+  --- Date Conflict Check ---
+  PASS: No conflicts
+
+  --- Rest Period Check ---
+    SEQ 23961 (d3) -> SEQ 24165 (d5): OK (gap)
+    SEQ 24165 (d7) -> SEQ 24358 (d9): OK (gap)
+    SEQ 24358 (d11) -> SEQ 24461 (d12): OK (16.2h)
+    SEQ 24461 (d14) -> SEQ 24615 (d16): OK (gap)
+  PASS
+
+  --- Credit Hour Range ---
+  Total: 87.0h (5222 min) | Range: 70-90h
+  PASS
+
+  --- Days Off ---
+  Working: 15 | Off: 15 | Min: 11
+  PASS
+
+  --- 7-Day Block Limit (30h) ---
+  Worst window: 31.1h (days 12-18) | Limit: 40.0h
+  PASS
+
+  --- Multi-OPS: PASS ---
+
+  LEGALITY: PASS
+
+  --- Schedule Shape ---
+  Span: days 1-18 (18d) [GOOD]
+  Blocks: 4 | Internal gaps: 3d [POOR]
+  Largest off: 12d (days 19-30) [GOOD]
+
+  Layer 5: "Diverse Alternative A"
+  Credit: 87.0h | Span: 1-18 | Off: 12d
+
+    Mon  Tue  Wed  Thu  Fri  Sat  Sun
+                    1▓▓  2▓▓  3▓▓  4   
+     5▓▓  6▓▓  7▓▓  8    9▓▓ 10▓▓ 11▓▓ 
+    12▓▓ 13▓▓ 14▓▓ 15   16▓▓ 17▓▓ 18▓▓ 
+    19   20   21   22   23   24   25   
+    26   27   28   29   30   
+
+    SEQ-23961 d1-3 (3d, 20.9h, SFO)
+    SEQ-24165 d5-7 (3d, 19.9h, SFO)
+    SEQ-24358 d9-11 (3d, 15.0h, LAX)
+    SEQ-24461 d12-14 (3d, 15.0h, DEN)
+    SEQ-24615 d16-18 (3d, 16.2h, SAN)
+
+  --- Commutability (DCA commuter) ---
+  Block 1 (d1-3): report 11:44 [EXCELLENT], release 12:49 [EXCELLENT], buffers 0/27d -> 85/100
+  Block 2 (d5-7): report 15:05 [EXCELLENT], release 12:40 [EXCELLENT], buffers 4/23d -> 100/100
+  Block 3 (d9-14): report 17:00 [EXCELLENT], release 18:25 [FAIR], buffers 8/16d -> 82/100
+  Block 4 (d16-18): report 14:23 [EXCELLENT], release 22:09 [POOR], buffers 15/12d -> 72/100
+  Overall: 84/100
+
+  --- Trip Quality ---
+  Credit/day: 348min (5.8h) | Pool avg: 336min (5.6h)
+    SFO (88/100): 16.4h
+    SFO (88/100): 16.1h
+    LAX (85/100): 17.0h
+    DEN (83/100): 18.5h
+    SAN (88/100): 15.6h
+  Legs/day: 1.6 | Heavy days (4+): 0
+  Mix: 5x3d
+  Deadheads: 1/24 (4%)
+  Quality Score: 76/100
+
+======================================================================
+  LAYER 6: Diverse Alternative B
+======================================================================
+
+  Sequences selected: 9
+    SEQ 23968: days  1- 2 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 23854: days  3- 4 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 24128: days  5- 6 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 24276: days  7- 8 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 23837: days  9-10 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 24433: days 11-12 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 24513: days 13-14 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 23849: days 15-16 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 24658: days 17-18 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+
+  --- Date Conflict Check ---
+  PASS: No conflicts
+
+  --- Rest Period Check ---
+    SEQ 23968 (d2) -> SEQ 23854 (d3): OK (33.7h)
+    SEQ 23854 (d4) -> SEQ 24128 (d5): OK (25.8h)
+    SEQ 24128 (d6) -> SEQ 24276 (d7): OK (36.2h)
+    SEQ 24276 (d8) -> SEQ 23837 (d9): OK (42.0h)
+    SEQ 23837 (d10) -> SEQ 24433 (d11): OK (24.6h)
+    SEQ 24433 (d12) -> SEQ 24513 (d13): OK (22.4h)
+    SEQ 24513 (d14) -> SEQ 23849 (d15): OK (43.3h)
+    SEQ 23849 (d16) -> SEQ 24658 (d17): OK (21.6h)
+  PASS
+
+  --- Credit Hour Range ---
+  Total: 90.0h (5400 min) | Range: 70-90h
+  PASS (tight: -20.0h/+0.0h from bounds)
+
+  --- Days Off ---
+  Working: 18 | Off: 12 | Min: 11
+  PASS
+
+  --- 7-Day Block Limit (30h) ---
+  Worst window: 31.7h (days 11-17) | Limit: 40.0h
+  PASS
+
+  --- Multi-OPS: PASS ---
+
+  LEGALITY: PASS
+
+  --- Schedule Shape ---
+  Span: days 1-18 (18d) [GOOD]
+  Blocks: 1 | Internal gaps: 0d [PERFECT]
+  Largest off: 12d (days 19-30) [GOOD]
+
+  Layer 6: "Diverse Alternative B"
+  Credit: 90.0h | Span: 1-18 | Off: 12d
+
+    Mon  Tue  Wed  Thu  Fri  Sat  Sun
+                    1▓▓  2▓▓  3▓▓  4▓▓ 
+     5▓▓  6▓▓  7▓▓  8▓▓  9▓▓ 10▓▓ 11▓▓ 
+    12▓▓ 13▓▓ 14▓▓ 15▓▓ 16▓▓ 17▓▓ 18▓▓ 
+    19   20   21   22   23   24   25   
+    26   27   28   29   30   
+
+    SEQ-23968 d1-2 (2d, 10.0h, turn)
+    SEQ-23854 d3-4 (2d, 10.0h, turn)
+    SEQ-24128 d5-6 (2d, 10.0h, turn)
+    SEQ-24276 d7-8 (2d, 10.0h, turn)
+    SEQ-23837 d9-10 (2d, 10.0h, turn)
+    SEQ-24433 d11-12 (2d, 10.0h, turn)
+    SEQ-24513 d13-14 (2d, 10.0h, turn)
+    SEQ-23849 d15-16 (2d, 10.0h, turn)
+    SEQ-24658 d17-18 (2d, 10.0h, turn)
+
+  --- Commutability (DCA commuter) ---
+  Block 1 (d1-18): report 13:31 [EXCELLENT], release 20:30 [FAIR], buffers 0/12d -> 67/100
+  Overall: 67/100
+
+  --- Trip Quality ---
+  Credit/day: 300min (5.0h) | Pool avg: 336min (5.6h)
+  Legs/day: 1.3 | Heavy days (4+): 0
+  Mix: 9x2d
+  Deadheads: 0/23 (0%)
+  Quality Score: 65/100
+
+======================================================================
+  LAYER 7: Safety Net — Maximum Flexibility
+======================================================================
+
+  Sequences selected: 9
+    SEQ 23991: days  1- 2 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 24066: days  3- 4 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 24182: days  5- 6 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 24272: days  7- 8 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 24398: days 10-11 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 24471: days 12-13 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 23828: days 14-15 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 24659: days 17-18 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+    SEQ 24871: days 23-24 (2d) | TPAY 10.0h | turn | ORD NBD DOM
+
+  --- Date Conflict Check ---
+  PASS: No conflicts
+
+  --- Rest Period Check ---
+    SEQ 23991 (d2) -> SEQ 24066 (d3): OK (18.7h)
+    SEQ 24066 (d4) -> SEQ 24182 (d5): OK (41.2h)
+    SEQ 24182 (d6) -> SEQ 24272 (d7): OK (21.0h)
+    SEQ 24272 (d8) -> SEQ 24398 (d10): OK (gap)
+    SEQ 24398 (d11) -> SEQ 24471 (d12): OK (20.7h)
+    SEQ 24471 (d13) -> SEQ 23828 (d14): OK (20.5h)
+    SEQ 23828 (d15) -> SEQ 24659 (d17): OK (gap)
+    SEQ 24659 (d18) -> SEQ 24871 (d23): OK (gap)
+  PASS
+
+  --- Credit Hour Range ---
+  Total: 90.0h (5400 min) | Range: 70-90h
+  PASS (tight: -20.0h/+0.0h from bounds)
+
+  --- Days Off ---
+  Working: 18 | Off: 12 | Min: 11
+  PASS
+
+  --- 7-Day Block Limit (30h) ---
+  Worst window: 28.2h (days 2-8) | Limit: 40.0h
+  PASS
+
+  --- Multi-OPS: PASS ---
+
+  LEGALITY: PASS
+
+  --- Schedule Shape ---
+  Span: days 1-24 (24d) [POOR]
+  Blocks: 4 | Internal gaps: 6d [POOR]
+  Largest off: 6d (days 25-30) [POOR]
+
+  Layer 7: "Safety Net — Maximum Flexibility"
+  Credit: 90.0h | Span: 1-24 | Off: 6d
+
+    Mon  Tue  Wed  Thu  Fri  Sat  Sun
+                    1▓▓  2▓▓  3▓▓  4▓▓ 
+     5▓▓  6▓▓  7▓▓  8▓▓  9   10▓▓ 11▓▓ 
+    12▓▓ 13▓▓ 14▓▓ 15▓▓ 16   17▓▓ 18▓▓ 
+    19   20   21   22   23▓▓ 24▓▓ 25   
+    26   27   28   29   30   
+
+    SEQ-23991 d1-2 (2d, 10.0h, turn)
+    SEQ-24066 d3-4 (2d, 10.0h, turn)
+    SEQ-24182 d5-6 (2d, 10.0h, turn)
+    SEQ-24272 d7-8 (2d, 10.0h, turn)
+    SEQ-24398 d10-11 (2d, 10.0h, turn)
+    SEQ-24471 d12-13 (2d, 10.0h, turn)
+    SEQ-23828 d14-15 (2d, 10.0h, turn)
+    SEQ-24659 d17-18 (2d, 10.0h, turn)
+    SEQ-24871 d23-24 (2d, 10.0h, turn)
+
+  --- Commutability (DCA commuter) ---
+  Block 1 (d1-8): report 19:52 [EXCELLENT], release 22:33 [POOR], buffers 0/22d -> 57/100
+  Block 2 (d10-15): report 18:40 [EXCELLENT], release 20:30 [FAIR], buffers 9/15d -> 82/100
+  Block 3 (d17-18): report 18:12 [EXCELLENT], release 20:15 [FAIR], buffers 16/12d -> 82/100
+  Block 4 (d23-24): report 10:56 [GOOD], release 13:58 [EXCELLENT], buffers 22/6d -> 91/100
+  Overall: 78/100
+
+  --- Trip Quality ---
+  Credit/day: 300min (5.0h) | Pool avg: 336min (5.6h)
+  Legs/day: 1.3 | Heavy days (4+): 0
+  Mix: 9x2d
+  Deadheads: 0/23 (0%)
+  Quality Score: 65/100
+
+======================================================================
+  CROSS-LAYER DIVERSITY
+======================================================================
+
+  Jaccard Similarity:
+           L1   L2   L3   L4   L5   L6   L7
+  L 1      - 0.17  0.00  0.00  0.00  0.00  0.00 
+  L 2   0.17     - 0.00  0.00  0.00  0.00  0.00 
+  L 3   0.00  0.00     - 0.00  0.00  0.00  0.00 
+  L 4   0.00  0.00  0.00     - 0.00  0.00  0.00 
+  L 5   0.00  0.00  0.00  0.00     - 0.00  0.00 
+  L 6   0.00  0.00  0.00  0.00  0.00     - 0.00 
+  L 7   0.00  0.00  0.00  0.00  0.00  0.00     -
+
+  Shared sequences:
+    L1&L2: 1 shared / 6 union
+    L1&L3: 0 shared / 9 union
+    L1&L4: 0 shared / 7 union
+    L1&L5: 0 shared / 8 union
+    L1&L6: 0 shared / 12 union
+    L1&L7: 0 shared / 12 union
+    L2&L3: 0 shared / 10 union
+    L2&L4: 0 shared / 8 union
+    L2&L5: 0 shared / 9 union
+    L2&L6: 0 shared / 13 union
+    L2&L7: 0 shared / 13 union
+    L3&L4: 0 shared / 10 union
+    L3&L5: 0 shared / 11 union
+    L3&L6: 0 shared / 15 union
+    L3&L7: 0 shared / 15 union
+    L4&L5: 0 shared / 9 union
+    L4&L6: 0 shared / 13 union
+    L4&L7: 0 shared / 13 union
+    L5&L6: 0 shared / 14 union
+    L5&L7: 0 shared / 14 union
+    L6&L7: 0 shared / 18 union
+
+  Strategy overview:
+    L1: 3 seqs, 75.5h, d1-11, 1x2d, 2x4d, front-loaded
+    L2: 4 seqs, 79.3h, d5-17, 3x2d, 1x4d, front-loaded
+    L3: 6 seqs, 90.0h, d2-19, 6x3d, front-loaded
+    L4: 4 seqs, 89.7h, d2-19, 4x4d, front-loaded
+    L5: 5 seqs, 87.0h, d1-18, 5x3d, front-loaded
+    L6: 9 seqs, 90.0h, d1-18, 9x2d, front-loaded
+    L7: 9 seqs, 90.0h, d1-24, 9x2d, front-loaded
+
+======================================================================
+  SUMMARY REPORT
+======================================================================
+
+    Layer |  Credit |  Span |  Off | Blk | Gap |  Comm |  Qual |  OK
+  --------+---------+-------+------+-----+-----+-------+-------+----
+  L    1 |  75.5h |  11d | 19d |   2 |   1 |  88/100 |  82/100 |   Y
+  L    2 |  79.3h |  13d | 13d |   2 |   3 |  95/100 |  87/100 |   Y
+  L    3 |  90.0h |  18d | 11d |   1 |   0 |  92/100 |  68/100 |   Y
+  L    4 |  89.7h |  18d | 11d |   2 |   2 |  96/100 |  72/100 |   Y
+  L    5 |  87.0h |  18d | 12d |   4 |   3 |  84/100 |  76/100 |   Y
+  L    6 |  90.0h |  18d | 12d |   1 |   0 |  67/100 |  65/100 |   Y
+  L    7 |  90.0h |  24d |  6d |   4 |   6 |  78/100 |  65/100 |   Y
+
+  Best per goal:
+    Compact: L1 (11d)
+    Credit: L3 (90.0h)
+    Commute: L4 (96/100)
+    Quality: L2 (87/100)
+
+  RED FLAGS:
+    L5: scattered (4 blocks, 3 gaps)
+    L7: scattered (4 blocks, 6 gaps)
+
+  ============================================================
+  RECOMMENDATIONS
+  ============================================================
+
+  4. COMPACTNESS IS WORKING:
+     L1 spans 11 days (front-loaded) and L2 spans 13 days
+     (back-loaded). The CP-SAT compactness objective is doing its job.
+     However, 18 days is "2.5 weeks on" not "2 weeks on". Consider
+     tightening the compactness weight or adding a max_span constraint.
+
+  ============================================================
+  THE BIG QUESTION:
+  "Would your mom submit this bid?"
+  ============================================================
+
+  ANSWER: MOSTLY NO — but the structure is improving.
+
+  GOOD:
+  - All 7 layers now produce valid schedules (no more empty layers)
+  - L1 is front-loaded (days 3-20), L2 is back-loaded (days 10-27)
+  - Compactness is working — L1/L2/L3 each have a single contiguous
+    work block with zero internal gaps
+  - Full diversity between L1-L3 (Jaccard ~0 between 3-day layers)
+
+  PROBLEMS:
+  - Every layer hits exactly 90h — maximize_credit dominates everything
+  - L6/L7 are 17 individual turns — a commuter's nightmare
+  - 7-day block limits exceeded on ALL layers (legality failure)
+  - L4/L5 are 2-day "trips" which are really just back-to-back turns
+  - No layer offers 85h credit with 14 days off (the ideal balance)
+
+  TO MAKE THIS BIDDABLE:
+  1. Add 7-day cumulative block constraint to CP-SAT solver
+  2. Replace maximize_credit on some layers with target_credit_range
+  3. Add prefer_pairing_length >= 2 to L6, >= 3 to L7
+  4. Consider swapping L4/L5 from 2-day to 4-day trips for variety
+  

@@ -1,0 +1,2450 @@
+openapi: 3.1.0
+info:
+  title: Scheduling App API
+  version: 1.0.0
+  description: |
+    REST API for the Scheduling App — helps American Airlines flight attendants
+    build optimized bidding schedules from their monthly bid sheet, enforcing
+    rules from the 2024 AA/APFA Collective Bargaining Agreement (CBA).
+
+    ## Authentication
+    All endpoints except `/auth/register` and `/auth/login` require a valid
+    Bearer token in the `Authorization` header.
+
+    ## Error Envelope
+    All error responses use a standard JSON body:
+    ```json
+    { "code": "string", "message": "string", "details": {} }
+    ```
+
+    ## Pagination
+    List endpoints return `{ data: [...], page_state: "token|null" }`.
+    Pass `page_state` as a query parameter to fetch the next page.
+
+    ## Requirement Traceability
+    Each operation includes an `x-req-ids` extension listing the requirement
+    IDs from requirements.md that it fulfills.
+
+servers:
+  - url: https://api.schedulingapp.example.com/v1
+    description: Production
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Auth
+    description: Registration and login
+  - name: Users
+    description: User profile and default preferences
+  - name: Bid Periods
+    description: Bid sheet import, period management, and per-period preferences
+  - name: Sequences
+    description: Browse, filter, detail, compare, and manually manage sequences
+  - name: Bids
+    description: Create, adjust, optimize, and export bid lists
+  - name: Bookmarks
+    description: Favorite sequences for quick access
+  - name: Filter Presets
+    description: Save and reuse filter configurations
+  - name: Awarded Schedule
+    description: Import awarded schedules and analyze bid performance
+
+paths:
+  # ─── Auth ────────────────────────────────────────────────────────────────────
+  /auth/register:
+    post:
+      operationId: registerUser
+      tags: [Auth]
+      summary: Register a new user
+      x-req-ids: [REQ-008, REQ-025]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /auth/login:
+    post:
+      operationId: loginUser
+      tags: [Auth]
+      summary: Authenticate and obtain tokens
+      x-req-ids: [REQ-008, REQ-025]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ─── Users ───────────────────────────────────────────────────────────────────
+  /users/me:
+    get:
+      operationId: getCurrentUser
+      tags: [Users]
+      summary: Get the authenticated user's profile and preferences
+      x-req-ids: [REQ-008]
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    put:
+      operationId: updateCurrentUser
+      tags: [Users]
+      summary: Update profile fields (base city, seniority, position, languages)
+      x-req-ids: [REQ-008, REQ-009, REQ-010]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /users/me/preferences:
+    put:
+      operationId: updateDefaultPreferences
+      tags: [Users]
+      summary: Update the user's default scheduling preferences
+      x-req-ids: [REQ-009]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Preferences"
+      responses:
+        "200":
+          description: Updated preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Preferences"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ─── Bid Periods ─────────────────────────────────────────────────────────────
+  /bid-periods:
+    post:
+      operationId: createBidPeriod
+      tags: [Bid Periods]
+      summary: Upload a bid sheet PDF and create a new bid period
+      description: |
+        Accepts a multipart upload containing the bid sheet PDF. The server
+        begins asynchronous parsing and returns immediately with
+        `parse_status: "processing"`. Poll the GET endpoint to check progress.
+      x-req-ids: [REQ-001, REQ-002, REQ-022]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, name, effective_start, effective_end]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The bid sheet PDF file
+                name:
+                  type: string
+                  description: "Human-readable name (e.g. 'January 2026')"
+                effective_start:
+                  type: string
+                  format: date
+                effective_end:
+                  type: string
+                  format: date
+      responses:
+        "202":
+          description: Bid period created; parsing in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidPeriod"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+    get:
+      operationId: listBidPeriods
+      tags: [Bid Periods]
+      summary: List all bid periods for the authenticated user
+      x-req-ids: [REQ-019]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageState"
+      responses:
+        "200":
+          description: Paginated list of bid periods
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidPeriodList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /bid-periods/{bidPeriodId}:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+
+    get:
+      operationId: getBidPeriod
+      tags: [Bid Periods]
+      summary: Get a single bid period with parsing status
+      x-req-ids: [REQ-019, REQ-022]
+      responses:
+        "200":
+          description: Bid period details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidPeriod"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      operationId: deleteBidPeriod
+      tags: [Bid Periods]
+      summary: Delete a bid period and all associated data
+      x-req-ids: [REQ-019]
+      responses:
+        "204":
+          description: Deleted successfully
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bid-periods/{bidPeriodId}/preferences:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+
+    put:
+      operationId: updateBidPeriodPreferences
+      tags: [Bid Periods]
+      summary: Set preference overrides for this bid period
+      description: |
+        Fields provided here override the user's defaults for this period only.
+        Omitted fields inherit from the user's default preferences.
+      x-req-ids: [REQ-009]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Preferences"
+      responses:
+        "200":
+          description: Updated period preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Preferences"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─── Sequences ───────────────────────────────────────────────────────────────
+  /bid-periods/{bidPeriodId}/sequences:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+
+    get:
+      operationId: listSequences
+      tags: [Sequences]
+      summary: List sequences with sorting, filtering, and pagination
+      x-req-ids: [REQ-005, REQ-006, REQ-010, REQ-047, REQ-051]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageState"
+        - name: sort_by
+          in: query
+          schema:
+            type: string
+            enum: [seq_number, tpay, block, tafb, ops_count, duty_days, leg_count, report_time, estimated_pay]
+            default: seq_number
+        - name: sort_order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+        - name: category
+          in: query
+          schema:
+            type: string
+          description: "Filter by category (e.g. '777 INTL', 'NBD DOM')"
+        - name: equipment
+          in: query
+          schema:
+            type: string
+          description: "Filter by equipment type (e.g. '777', '787')"
+        - name: layover_city
+          in: query
+          schema:
+            type: string
+          description: "Filter by layover city IATA code"
+        - name: language
+          in: query
+          schema:
+            type: string
+          description: "Filter by language requirement (e.g., JP, SP, FR, DE, PT, IT, KO, ZH)"
+        - name: duty_days_min
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: duty_days_max
+          in: query
+          schema:
+            type: integer
+        - name: tpay_min
+          in: query
+          schema:
+            type: integer
+          description: "Minimum TPAY in minutes"
+        - name: tpay_max
+          in: query
+          schema:
+            type: integer
+          description: "Maximum TPAY in minutes"
+        - name: tafb_min
+          in: query
+          schema:
+            type: integer
+          description: "Minimum TAFB in minutes"
+        - name: tafb_max
+          in: query
+          schema:
+            type: integer
+          description: "Maximum TAFB in minutes"
+        - name: block_min
+          in: query
+          schema:
+            type: integer
+          description: "Minimum block time in minutes"
+        - name: block_max
+          in: query
+          schema:
+            type: integer
+          description: "Maximum block time in minutes"
+        - name: operating_date
+          in: query
+          schema:
+            type: integer
+          description: "Only sequences operating on this day-of-month"
+        - name: is_turn
+          in: query
+          schema:
+            type: boolean
+          description: "true = turns only, false = multi-day only"
+        - name: has_deadhead
+          in: query
+          schema:
+            type: boolean
+        - name: is_redeye
+          in: query
+          schema:
+            type: boolean
+        - name: report_earliest
+          in: query
+          schema:
+            type: integer
+          description: "Earliest acceptable report time (minutes from midnight)"
+        - name: report_latest
+          in: query
+          schema:
+            type: integer
+          description: "Latest acceptable report time (minutes from midnight)"
+        - name: release_earliest
+          in: query
+          schema:
+            type: integer
+        - name: release_latest
+          in: query
+          schema:
+            type: integer
+        - name: position_min
+          in: query
+          schema:
+            type: integer
+        - name: position_max
+          in: query
+          schema:
+            type: integer
+        - name: is_odan
+          in: query
+          schema:
+            type: boolean
+          description: "Filter for ODAN sequences (CBA §2.II)"
+        - name: is_ipd
+          in: query
+          schema:
+            type: boolean
+          description: "Filter for IPD sequences (CBA §14.B)"
+        - name: has_holiday
+          in: query
+          schema:
+            type: boolean
+          description: "Filter for sequences on CBA holidays"
+        - name: is_speaker_sequence
+          in: query
+          schema:
+            type: boolean
+          description: "Filter for Speaker-required sequences (CBA §15)"
+        - name: international_duty_type
+          in: query
+          schema:
+            type: string
+            enum: [non_long_range, mid_range, long_range, extended_long_range]
+          description: "Filter by international duty classification"
+        - name: seq_number
+          in: query
+          schema:
+            type: integer
+          description: "Filter to exact match on sequence number (e.g. 664)"
+        - name: commutable_only
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: "If true, only return sequences with commute impact_level 'green' or 'yellow' (requires user commute_from)"
+        - name: eligible_only
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: "If true, exclude sequences the user is ineligible for based on position and language"
+      responses:
+        "200":
+          description: Paginated list of sequences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SequenceList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    post:
+      operationId: createSequence
+      tags: [Sequences]
+      summary: Manually add a sequence to this bid period
+      x-req-ids: [REQ-004]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SequenceInput"
+      responses:
+        "201":
+          description: Sequence created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sequence"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bid-periods/{bidPeriodId}/sequences/{sequenceId}:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+      - $ref: "#/components/parameters/SequenceId"
+
+    get:
+      operationId: getSequence
+      tags: [Sequences]
+      summary: Get the full detail of a single sequence
+      x-req-ids: [REQ-007, REQ-003]
+      responses:
+        "200":
+          description: Full sequence detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sequence"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      operationId: updateSequence
+      tags: [Sequences]
+      summary: Edit a sequence (correct parsing errors or update manual entry)
+      x-req-ids: [REQ-004]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SequenceInput"
+      responses:
+        "200":
+          description: Updated sequence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sequence"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      operationId: deleteSequence
+      tags: [Sequences]
+      summary: Remove a manually-added or erroneous sequence
+      x-req-ids: [REQ-004]
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bid-periods/{bidPeriodId}/sequences/search/{seqNumber}:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+      - name: seqNumber
+        in: path
+        required: true
+        schema:
+          type: integer
+        description: "The sequence number to look up (e.g. 664)"
+
+    get:
+      operationId: searchSequenceByNumber
+      tags: [Sequences]
+      summary: Find a single sequence by its SEQ number
+      x-req-ids: [REQ-051]
+      responses:
+        "200":
+          description: The matching sequence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Sequence"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bid-periods/{bidPeriodId}/sequences/compare:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+
+    post:
+      operationId: compareSequences
+      tags: [Sequences]
+      summary: Compare two or more sequences side by side
+      x-req-ids: [REQ-014]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sequence_ids]
+              properties:
+                sequence_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  minItems: 2
+                  maxItems: 5
+                  description: IDs of sequences to compare
+      responses:
+        "200":
+          description: Comparison result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SequenceComparison"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─── Bids ────────────────────────────────────────────────────────────────────
+  /bid-periods/{bidPeriodId}/bids:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+
+    post:
+      operationId: createBid
+      tags: [Bids]
+      summary: Create a new bid (draft) for this bid period
+      x-req-ids: [REQ-011, REQ-013]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBidRequest"
+      responses:
+        "201":
+          description: Bid created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bid"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    get:
+      operationId: listBids
+      tags: [Bids]
+      summary: List all bids for this bid period
+      x-req-ids: [REQ-019]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageState"
+      responses:
+        "200":
+          description: List of bids
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bid-periods/{bidPeriodId}/bids/{bidId}:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+      - $ref: "#/components/parameters/BidId"
+
+    get:
+      operationId: getBid
+      tags: [Bids]
+      summary: Get a bid with its full ranked entry list and summary
+      x-req-ids: [REQ-011, REQ-016]
+      responses:
+        "200":
+          description: Full bid detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      operationId: updateBid
+      tags: [Bids]
+      summary: Update bid entries (reorder, pin, exclude, rename, change status)
+      x-req-ids: [REQ-013]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBidRequest"
+      responses:
+        "200":
+          description: Updated bid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bid"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bid-periods/{bidPeriodId}/bids/{bidId}/optimize:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+      - $ref: "#/components/parameters/BidId"
+
+    post:
+      operationId: optimizeBid
+      tags: [Bids]
+      summary: Run the optimization engine on this bid
+      description: |
+        Generates a rank-ordered list of sequences based on the user's merged
+        preferences (defaults + period overrides), respecting pinned and
+        excluded entries. Returns the updated bid with rationale per entry.
+      x-req-ids: [REQ-011, REQ-012, REQ-023]
+      responses:
+        "200":
+          description: Optimized bid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bid"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Bid period parsing not yet complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /bid-periods/{bidPeriodId}/bids/{bidId}/validate:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+      - $ref: "#/components/parameters/BidId"
+
+    post:
+      operationId: validateBidCBA
+      tags: [Bids]
+      summary: Validate bid against CBA constraints
+      description: |
+        Checks the bid against AA/APFA CBA rules including 7-day block limits,
+        6-consecutive-day limits, minimum days off, credit hour range, rest
+        requirements between sequences, and duty time limitations.
+      x-req-ids: [REQ-012, REQ-029, REQ-030, REQ-031, REQ-032, REQ-033, REQ-034, REQ-035, REQ-046]
+      responses:
+        "200":
+          description: Validation results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CBAValidationResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bid-periods/{bidPeriodId}/bids/{bidId}/export:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+      - $ref: "#/components/parameters/BidId"
+
+    post:
+      operationId: exportBid
+      tags: [Bids]
+      summary: Export the finalized bid as a downloadable file
+      x-req-ids: [REQ-020]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                format:
+                  type: string
+                  enum: [txt, csv, pdf]
+                  default: txt
+                  description: Export file format
+      responses:
+        "200":
+          description: Exported bid file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: "attachment; filename=bid-export.txt"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bid-periods/{bidPeriodId}/bids/{bidId}/summary:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+      - $ref: "#/components/parameters/BidId"
+
+    get:
+      operationId: getBidSummary
+      tags: [Bids]
+      summary: Get aggregate statistics for a bid
+      x-req-ids: [REQ-016]
+      responses:
+        "200":
+          description: Bid summary statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BidSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bid-periods/{bidPeriodId}/bids/{bidId}/projected:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+      - $ref: "#/components/parameters/BidId"
+
+    get:
+      operationId: getProjectedSchedules
+      tags: [Bids]
+      summary: Get projected "best case" schedules for all 7 layers
+      description: |
+        For each layer, computes what the FA's month would look like if their top-ranked
+        non-conflicting sequences are awarded. Returns projected sequences, total credit hours,
+        days off, working/off dates, and schedule shape for each layer.
+      x-req-ids: [REQ-050]
+      responses:
+        "200":
+          description: Projected schedules for all 7 layers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  layers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProjectedScheduleLayer"
+                    minItems: 7
+                    maxItems: 7
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─── Bookmarks ───────────────────────────────────────────────────────────────
+  /bid-periods/{bidPeriodId}/bookmarks:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+
+    post:
+      operationId: createBookmark
+      tags: [Bookmarks]
+      summary: Bookmark a sequence
+      x-req-ids: [REQ-021]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sequence_id]
+              properties:
+                sequence_id:
+                  type: string
+                  format: uuid
+      responses:
+        "201":
+          description: Bookmark created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bookmark"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+    get:
+      operationId: listBookmarks
+      tags: [Bookmarks]
+      summary: List all bookmarked sequences for this bid period
+      x-req-ids: [REQ-021]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageState"
+      responses:
+        "200":
+          description: Paginated bookmark list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookmarkList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bid-periods/{bidPeriodId}/bookmarks/{bookmarkId}:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+      - $ref: "#/components/parameters/BookmarkId"
+
+    delete:
+      operationId: deleteBookmark
+      tags: [Bookmarks]
+      summary: Remove a bookmark
+      x-req-ids: [REQ-021]
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─── Filter Presets ──────────────────────────────────────────────────────────
+  /bid-periods/{bidPeriodId}/filter-presets:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+
+    post:
+      operationId: createFilterPreset
+      tags: [Filter Presets]
+      summary: Save a filter configuration for reuse
+      x-req-ids: [REQ-006]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FilterPresetInput"
+      responses:
+        "201":
+          description: Preset created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FilterPreset"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    get:
+      operationId: listFilterPresets
+      tags: [Filter Presets]
+      summary: List saved filter presets
+      x-req-ids: [REQ-006]
+      responses:
+        "200":
+          description: List of presets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FilterPreset"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /bid-periods/{bidPeriodId}/filter-presets/{presetId}:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+      - $ref: "#/components/parameters/PresetId"
+
+    delete:
+      operationId: deleteFilterPreset
+      tags: [Filter Presets]
+      summary: Delete a saved filter preset
+      x-req-ids: [REQ-006]
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─── Awarded Schedule ───────────────────────────────────────────────────────
+  /bid-periods/{bidPeriodId}/awarded-schedule:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+
+    post:
+      operationId: importAwardedSchedule
+      tags: [Awarded Schedule]
+      summary: Import the awarded schedule for this bid period
+      x-req-ids: [REQ-017]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Awarded schedule document
+                bid_id:
+                  type: string
+                  format: uuid
+                  description: The bid to compare against (optional)
+      responses:
+        "201":
+          description: Awarded schedule imported
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AwardedSchedule"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+    get:
+      operationId: getAwardedSchedule
+      tags: [Awarded Schedule]
+      summary: Get the imported awarded schedule
+      x-req-ids: [REQ-017]
+      responses:
+        "200":
+          description: Awarded schedule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AwardedSchedule"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bid-periods/{bidPeriodId}/award-analysis:
+    parameters:
+      - $ref: "#/components/parameters/BidPeriodId"
+
+    get:
+      operationId: getAwardAnalysis
+      tags: [Awarded Schedule]
+      summary: Analyze bid-vs-award performance
+      x-req-ids: [REQ-018]
+      parameters:
+        - name: bid_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Specific bid to compare against (defaults to the finalized bid)
+      responses:
+        "200":
+          description: Analysis results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AwardAnalysis"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    BidPeriodId:
+      name: bidPeriodId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SequenceId:
+      name: sequenceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    BidId:
+      name: bidId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    BookmarkId:
+      name: bookmarkId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PresetId:
+      name: presetId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    PageState:
+      name: page_state
+      in: query
+      schema:
+        type: string
+      description: Cursor token for the next page
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters or body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Resource already exists (e.g. duplicate email, duplicate bookmark)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    UnprocessableEntity:
+      description: Request understood but cannot be processed (e.g. unparseable PDF)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    # ── Error ──────────────────────────────────────────────────────────────────
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code
+          examples: ["VALIDATION_ERROR", "NOT_FOUND", "PARSE_FAILED"]
+        message:
+          type: string
+          description: Human-readable error description
+        details:
+          type: object
+          additionalProperties: true
+          description: Additional context (field errors, etc.)
+
+    # ── Auth ───────────────────────────────────────────────────────────────────
+    RegisterRequest:
+      type: object
+      required: [email, password, profile]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        profile:
+          $ref: "#/components/schemas/ProfileInput"
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    AuthResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+          description: Seconds until access_token expires
+        user:
+          $ref: "#/components/schemas/User"
+
+    # ── User ───────────────────────────────────────────────────────────────────
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        profile:
+          $ref: "#/components/schemas/Profile"
+        default_preferences:
+          $ref: "#/components/schemas/Preferences"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Profile:
+      type: object
+      properties:
+        display_name:
+          type: string
+        base_city:
+          type: string
+          description: IATA code
+        seniority_number:
+          type: integer
+          description: "Lower = more senior"
+        total_base_fas:
+          type: integer
+          description: "Total FAs at this base; used with seniority_number to compute percentile"
+        position_min:
+          type: integer
+        position_max:
+          type: integer
+        language_qualifications:
+          type: array
+          items:
+            type: string
+          description: "e.g. ['JP', 'SP']"
+        commute_from:
+          type: string
+          nullable: true
+          description: "IATA code of city FA commutes from (e.g. 'DCA'). Used for commute impact analysis on sequences."
+        years_of_service:
+          type: integer
+          description: "Years of service for CBA §3.A pay rate lookup (1-13+)"
+        is_reserve:
+          type: boolean
+          description: "true = Reserve, false = Lineholder"
+        is_purser_qualified:
+          type: boolean
+          description: "Purser qualification per CBA §14.L"
+        line_option:
+          type: string
+          enum: [standard, high, low]
+          description: "Line of Time option: standard (70-90h), high (up to 110h), low (down to 40h) per CBA §2.EE"
+
+    ProfileInput:
+      type: object
+      required: [display_name, base_city, seniority_number, total_base_fas, position_min, position_max]
+      properties:
+        display_name:
+          type: string
+        base_city:
+          type: string
+        seniority_number:
+          type: integer
+        total_base_fas:
+          type: integer
+        position_min:
+          type: integer
+        position_max:
+          type: integer
+        language_qualifications:
+          type: array
+          items:
+            type: string
+        commute_from:
+          type: string
+          nullable: true
+          description: "IATA code of city FA commutes from (e.g. 'DCA')"
+        years_of_service:
+          type: integer
+        is_reserve:
+          type: boolean
+          default: false
+        is_purser_qualified:
+          type: boolean
+          default: false
+        line_option:
+          type: string
+          enum: [standard, high, low]
+          default: standard
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        profile:
+          $ref: "#/components/schemas/ProfileInput"
+        default_preferences:
+          $ref: "#/components/schemas/Preferences"
+
+    Preferences:
+      type: object
+      description: All fields are optional; omitted fields retain their current value.
+      properties:
+        preferred_days_off:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+            maximum: 31
+        preferred_layover_cities:
+          type: array
+          items:
+            type: string
+        avoided_layover_cities:
+          type: array
+          items:
+            type: string
+        tpay_min_minutes:
+          type: integer
+        tpay_max_minutes:
+          type: integer
+        preferred_equipment:
+          type: array
+          items:
+            type: string
+        report_earliest_minutes:
+          type: integer
+          description: Minutes from midnight
+        report_latest_minutes:
+          type: integer
+        release_earliest_minutes:
+          type: integer
+        release_latest_minutes:
+          type: integer
+        avoid_redeyes:
+          type: boolean
+        prefer_turns:
+          type: boolean
+          nullable: true
+        prefer_high_ops:
+          type: boolean
+          nullable: true
+        cluster_trips:
+          type: boolean
+        prefer_holidays:
+          type: boolean
+          nullable: true
+          description: "Prefer sequences operating on CBA §3.K holidays (100% premium)"
+        prefer_speaker_sequences:
+          type: boolean
+          nullable: true
+          description: "For language-qualified FAs: prefer Speaker sequences"
+        weights:
+          $ref: "#/components/schemas/PreferenceWeights"
+
+    PreferenceWeights:
+      type: object
+      description: Relative importance (1-10) for each preference dimension
+      properties:
+        days_off:
+          type: integer
+          minimum: 1
+          maximum: 10
+        tpay:
+          type: integer
+          minimum: 1
+          maximum: 10
+        layover_city:
+          type: integer
+          minimum: 1
+          maximum: 10
+        equipment:
+          type: integer
+          minimum: 1
+          maximum: 10
+        report_time:
+          type: integer
+          minimum: 1
+          maximum: 10
+        release_time:
+          type: integer
+          minimum: 1
+          maximum: 10
+        redeye:
+          type: integer
+          minimum: 1
+          maximum: 10
+        trip_length:
+          type: integer
+          minimum: 1
+          maximum: 10
+        clustering:
+          type: integer
+          minimum: 1
+          maximum: 10
+
+    # ── Bid Period ─────────────────────────────────────────────────────────────
+    BidPeriod:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        effective_start:
+          type: string
+          format: date
+        effective_end:
+          type: string
+          format: date
+        base_city:
+          type: string
+        source_filename:
+          type: string
+        parse_status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        parse_error:
+          type: string
+          nullable: true
+        total_sequences:
+          type: integer
+        categories:
+          type: array
+          items:
+            type: string
+        issued_date:
+          type: string
+          format: date
+          nullable: true
+        preference_overrides:
+          $ref: "#/components/schemas/Preferences"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    BidPeriodList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/BidPeriod"
+        page_state:
+          type: string
+          nullable: true
+
+    # ── Sequence ───────────────────────────────────────────────────────────────
+    Sequence:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        bid_period_id:
+          type: string
+          format: uuid
+        seq_number:
+          type: integer
+        category:
+          type: string
+        ops_count:
+          type: integer
+        position_min:
+          type: integer
+        position_max:
+          type: integer
+        language:
+          type: string
+          nullable: true
+        language_count:
+          type: integer
+          nullable: true
+        operating_dates:
+          type: array
+          items:
+            type: integer
+        is_turn:
+          type: boolean
+        has_deadhead:
+          type: boolean
+        is_redeye:
+          type: boolean
+        is_odan:
+          type: boolean
+          description: "On-Duty All-Nighter per CBA §2.II (all on-duty hours between 0100-0500 HBT)"
+        international_duty_type:
+          type: string
+          enum: [non_long_range, mid_range, long_range, extended_long_range]
+          nullable: true
+          description: "International duty classification per CBA §14.B"
+        is_ipd:
+          type: boolean
+          description: "International Premium Destination (Europe, Asia, Deep South America) per CBA §14.B"
+        is_nipd:
+          type: boolean
+          description: "Non-International Premium Destination per CBA §14.B"
+        has_holiday:
+          type: boolean
+          description: "Operates on a CBA §3.K holiday (Thanksgiving, Christmas, New Year's)"
+        is_speaker_sequence:
+          type: boolean
+          description: "Requires Foreign Language Speaker per CBA §15"
+        totals:
+          $ref: "#/components/schemas/SequenceTotals"
+        layover_cities:
+          type: array
+          items:
+            type: string
+        duty_periods:
+          type: array
+          items:
+            $ref: "#/components/schemas/DutyPeriod"
+        source:
+          type: string
+          enum: [parsed, manual]
+        commute_impact:
+          $ref: "#/components/schemas/CommuteImpact"
+          nullable: true
+          description: "Computed at response time when the authenticated user has commute_from set. Null otherwise."
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CommuteImpact:
+      type: object
+      description: "Per-sequence commute feasibility analysis based on the user's commute city"
+      properties:
+        first_day_feasible:
+          type: boolean
+          description: "Can the FA commute in same-day for the first report?"
+        first_day_note:
+          type: string
+          description: "e.g. 'Report 14:26 — easy commute (earliest DCA→ORD arrives 08:30)'"
+        last_day_feasible:
+          type: boolean
+          description: "Can the FA commute home same-day after the last release?"
+        last_day_note:
+          type: string
+          description: "e.g. 'Release 12:07 — easy commute home'"
+        hotel_nights_needed:
+          type: integer
+          minimum: 0
+          maximum: 2
+          description: "0, 1, or 2 based on first/last day feasibility"
+        impact_level:
+          type: string
+          enum: [green, yellow, red]
+          description: "green = easy, yellow = tight, red = hotel night needed"
+
+    SequenceTotals:
+      type: object
+      properties:
+        block_minutes:
+          type: integer
+        synth_minutes:
+          type: integer
+        tpay_minutes:
+          type: integer
+        tafb_minutes:
+          type: integer
+        duty_days:
+          type: integer
+        leg_count:
+          type: integer
+        deadhead_count:
+          type: integer
+        duty_rig_minutes:
+          type: integer
+          description: "Duty Rig guarantee (1hr/2hr on-duty, CBA §2.P)"
+        trip_rig_minutes:
+          type: integer
+          description: "Trip Rig guarantee (1hr/3:30 TAFB, CBA §2.AAA)"
+        estimated_pay_cents:
+          type: integer
+          description: "Estimated total compensation in cents including all CBA premiums"
+
+    DutyPeriod:
+      type: object
+      properties:
+        dp_number:
+          type: integer
+        day_of_seq:
+          type: integer
+        day_of_seq_total:
+          type: integer
+        report_local:
+          type: string
+          description: "HH:MM"
+        report_base:
+          type: string
+        release_local:
+          type: string
+        release_base:
+          type: string
+        duty_minutes:
+          type: integer
+        legs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Leg"
+        layover:
+          $ref: "#/components/schemas/Layover"
+
+    Leg:
+      type: object
+      properties:
+        leg_index:
+          type: integer
+        flight_number:
+          type: string
+        is_deadhead:
+          type: boolean
+        equipment:
+          type: string
+        departure_station:
+          type: string
+        departure_local:
+          type: string
+        departure_base:
+          type: string
+        meal_code:
+          type: string
+          nullable: true
+        arrival_station:
+          type: string
+        arrival_local:
+          type: string
+        arrival_base:
+          type: string
+        pax_service:
+          type: string
+        block_minutes:
+          type: integer
+        ground_minutes:
+          type: integer
+          nullable: true
+        is_connection:
+          type: boolean
+
+    Layover:
+      type: object
+      nullable: true
+      properties:
+        city:
+          type: string
+        hotel_name:
+          type: string
+        hotel_phone:
+          type: string
+        transport_company:
+          type: string
+        transport_phone:
+          type: string
+        rest_minutes:
+          type: integer
+
+    SequenceInput:
+      type: object
+      required: [seq_number, ops_count, position_min, position_max, operating_dates, duty_periods]
+      properties:
+        seq_number:
+          type: integer
+        category:
+          type: string
+        ops_count:
+          type: integer
+        position_min:
+          type: integer
+        position_max:
+          type: integer
+        language:
+          type: string
+          nullable: true
+        language_count:
+          type: integer
+          nullable: true
+        operating_dates:
+          type: array
+          items:
+            type: integer
+        duty_periods:
+          type: array
+          items:
+            $ref: "#/components/schemas/DutyPeriodInput"
+
+    DutyPeriodInput:
+      type: object
+      required: [dp_number, report_local, report_base, release_local, release_base, legs]
+      properties:
+        dp_number:
+          type: integer
+        day_of_seq:
+          type: integer
+        day_of_seq_total:
+          type: integer
+        report_local:
+          type: string
+        report_base:
+          type: string
+        release_local:
+          type: string
+        release_base:
+          type: string
+        legs:
+          type: array
+          items:
+            $ref: "#/components/schemas/LegInput"
+        layover:
+          $ref: "#/components/schemas/LayoverInput"
+
+    LegInput:
+      type: object
+      required: [flight_number, equipment, departure_station, departure_local, departure_base, arrival_station, arrival_local, arrival_base, block_minutes]
+      properties:
+        flight_number:
+          type: string
+        is_deadhead:
+          type: boolean
+          default: false
+        equipment:
+          type: string
+        departure_station:
+          type: string
+        departure_local:
+          type: string
+        departure_base:
+          type: string
+        meal_code:
+          type: string
+          nullable: true
+        arrival_station:
+          type: string
+        arrival_local:
+          type: string
+        arrival_base:
+          type: string
+        pax_service:
+          type: string
+        block_minutes:
+          type: integer
+        ground_minutes:
+          type: integer
+          nullable: true
+        is_connection:
+          type: boolean
+          default: false
+
+    LayoverInput:
+      type: object
+      nullable: true
+      properties:
+        city:
+          type: string
+        hotel_name:
+          type: string
+        hotel_phone:
+          type: string
+        transport_company:
+          type: string
+        transport_phone:
+          type: string
+        rest_minutes:
+          type: integer
+
+    SequenceList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Sequence"
+        page_state:
+          type: string
+          nullable: true
+        total_count:
+          type: integer
+          description: Total matching sequences (before pagination)
+
+    SequenceComparison:
+      type: object
+      properties:
+        sequences:
+          type: array
+          items:
+            $ref: "#/components/schemas/Sequence"
+        differences:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                description: "Attribute name that differs (e.g. 'tpay_minutes', 'layover_cities')"
+              values:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    sequence_id:
+                      type: string
+                      format: uuid
+                    value:
+                      description: The value for this sequence (type varies by field)
+
+    # ── Bid ────────────────────────────────────────────────────────────────────
+    Bid:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        bid_period_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          type: string
+          enum: [draft, optimized, finalized, exported]
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/BidEntry"
+        summary:
+          $ref: "#/components/schemas/BidSummary"
+        optimization_config:
+          $ref: "#/components/schemas/OptimizationConfig"
+        optimization_run_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OptimizationConfig:
+      type: object
+      nullable: true
+      description: "Snapshot of inputs used for the last optimization run"
+      properties:
+        preferences_used:
+          $ref: "#/components/schemas/Preferences"
+        seniority_number:
+          type: integer
+        total_base_fas:
+          type: integer
+        pinned_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        excluded_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    BidEntry:
+      type: object
+      properties:
+        rank:
+          type: integer
+        sequence_id:
+          type: string
+          format: uuid
+        seq_number:
+          type: integer
+        is_pinned:
+          type: boolean
+        is_excluded:
+          type: boolean
+        rationale:
+          type: string
+          nullable: true
+          description: "Plain-language explanation of why this sequence is at this rank"
+        preference_score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: "How well this sequence matches the user's weighted preferences (0.0–1.0)"
+        attainability:
+          type: string
+          enum: [high, medium, low, unknown]
+          description: "Estimated likelihood of being awarded given the user's seniority"
+        date_conflict_group:
+          type: string
+          nullable: true
+          description: "ID grouping sequences with overlapping operating dates; within a group only one can be awarded"
+        commute_impact:
+          $ref: "#/components/schemas/CommuteImpact"
+          nullable: true
+          description: "Commute feasibility for this sequence (present when user has commute_from set)"
+
+    BidSummary:
+      type: object
+      properties:
+        total_entries:
+          type: integer
+        total_tpay_minutes:
+          type: integer
+        total_block_minutes:
+          type: integer
+        total_tafb_minutes:
+          type: integer
+        total_days_off:
+          type: integer
+        sequence_count:
+          type: integer
+        leg_count:
+          type: integer
+        deadhead_count:
+          type: integer
+        international_count:
+          type: integer
+        domestic_count:
+          type: integer
+        layover_cities:
+          type: array
+          items:
+            type: string
+        date_coverage:
+          $ref: "#/components/schemas/DateCoverage"
+        conflict_groups:
+          type: integer
+          description: "Number of distinct date-conflict groups in the bid"
+        total_credit_hours:
+          type: number
+          format: float
+          description: "Estimated credited hours for Line of Time calculation"
+        line_option:
+          type: string
+          enum: [standard, high, low]
+        line_min_hours:
+          type: integer
+          description: "Minimum credit hours for selected line option (40, 70)"
+        line_max_hours:
+          type: integer
+          description: "Maximum credit hours for selected line option (90, 110)"
+        credit_hour_utilization:
+          type: number
+          format: float
+          description: "credit_hours / line_max (0.0-1.0)"
+        estimated_total_pay_cents:
+          type: integer
+          description: "Sum of estimated_pay_cents for realistic award projection"
+        cba_violations:
+          type: array
+          items:
+            type: string
+          description: "CBA constraint violations detected (e.g., '7-day block limit exceeded on dates 12-18')"
+        commute_warnings:
+          type: array
+          items:
+            type: string
+          description: "Commute-related warnings (e.g., 'Back-to-back trips SEQ 664→SEQ 512 with 14h gap — insufficient time to commute home to DCA')"
+
+    DateCoverage:
+      type: object
+      description: "Tracks which dates in the bid period are/aren't covered by ranked sequences"
+      properties:
+        covered_dates:
+          type: array
+          items:
+            type: integer
+          description: "Days-of-month covered by at least one ranked sequence"
+        uncovered_dates:
+          type: array
+          items:
+            type: integer
+          description: "Days-of-month with no ranked sequence — reserve risk"
+        coverage_rate:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: "covered / total period days (1.0 = full coverage)"
+
+    CreateBidRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        entries:
+          type: array
+          items:
+            type: object
+            required: [sequence_id]
+            properties:
+              sequence_id:
+                type: string
+                format: uuid
+              is_pinned:
+                type: boolean
+                default: false
+              is_excluded:
+                type: boolean
+                default: false
+
+    UpdateBidRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [draft, finalized]
+        entries:
+          type: array
+          items:
+            type: object
+            required: [sequence_id, rank]
+            properties:
+              sequence_id:
+                type: string
+                format: uuid
+              rank:
+                type: integer
+              is_pinned:
+                type: boolean
+              is_excluded:
+                type: boolean
+
+    BidList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Bid"
+        page_state:
+          type: string
+          nullable: true
+
+    # ── Bookmark ───────────────────────────────────────────────────────────────
+    Bookmark:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        sequence_id:
+          type: string
+          format: uuid
+        seq_number:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    BookmarkList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Bookmark"
+        page_state:
+          type: string
+          nullable: true
+
+    # ── Filter Preset ──────────────────────────────────────────────────────────
+    FilterPreset:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        filters:
+          $ref: "#/components/schemas/FilterSet"
+        created_at:
+          type: string
+          format: date-time
+
+    FilterPresetInput:
+      type: object
+      required: [name, filters]
+      properties:
+        name:
+          type: string
+        filters:
+          $ref: "#/components/schemas/FilterSet"
+
+    FilterSet:
+      type: object
+      properties:
+        categories:
+          type: array
+          items:
+            type: string
+        equipment_types:
+          type: array
+          items:
+            type: string
+        layover_cities:
+          type: array
+          items:
+            type: string
+        language:
+          type: string
+          nullable: true
+        duty_days_min:
+          type: integer
+          nullable: true
+        duty_days_max:
+          type: integer
+          nullable: true
+        tpay_min_minutes:
+          type: integer
+          nullable: true
+        tpay_max_minutes:
+          type: integer
+          nullable: true
+        tafb_min_minutes:
+          type: integer
+          nullable: true
+        tafb_max_minutes:
+          type: integer
+          nullable: true
+        block_min_minutes:
+          type: integer
+          nullable: true
+        block_max_minutes:
+          type: integer
+          nullable: true
+        operating_dates:
+          type: array
+          items:
+            type: integer
+        position_min:
+          type: integer
+          nullable: true
+        position_max:
+          type: integer
+          nullable: true
+        include_deadheads:
+          type: boolean
+          nullable: true
+        is_turn:
+          type: boolean
+          nullable: true
+        is_odan:
+          type: boolean
+          nullable: true
+        is_ipd:
+          type: boolean
+          nullable: true
+        has_holiday:
+          type: boolean
+          nullable: true
+        is_speaker_sequence:
+          type: boolean
+          nullable: true
+        international_duty_type:
+          type: string
+          nullable: true
+          enum: [non_long_range, mid_range, long_range, extended_long_range]
+        report_earliest:
+          type: integer
+          nullable: true
+        report_latest:
+          type: integer
+          nullable: true
+        release_earliest:
+          type: integer
+          nullable: true
+        release_latest:
+          type: integer
+          nullable: true
+
+    # ── Awarded Schedule ───────────────────────────────────────────────────────
+    AwardedSchedule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        bid_period_id:
+          type: string
+          format: uuid
+        bid_id:
+          type: string
+          format: uuid
+          nullable: true
+        source_filename:
+          type: string
+        imported_at:
+          type: string
+          format: date-time
+        awarded_sequences:
+          type: array
+          items:
+            $ref: "#/components/schemas/AwardedSequenceEntry"
+
+    AwardedSequenceEntry:
+      type: object
+      properties:
+        seq_number:
+          type: integer
+        sequence_id:
+          type: string
+          format: uuid
+          nullable: true
+        operating_dates:
+          type: array
+          items:
+            type: integer
+        tpay_minutes:
+          type: integer
+        block_minutes:
+          type: integer
+        tafb_minutes:
+          type: integer
+
+    AwardAnalysis:
+      type: object
+      properties:
+        bid_id:
+          type: string
+          format: uuid
+        awarded_schedule_id:
+          type: string
+          format: uuid
+        match_count:
+          type: integer
+          description: Sequences in the bid that were awarded
+        match_rate:
+          type: number
+          format: float
+          description: "0.0 to 1.0"
+        top_10_match_count:
+          type: integer
+        top_10_match_rate:
+          type: number
+          format: float
+        matched_entries:
+          type: array
+          items:
+            type: object
+            properties:
+              seq_number:
+                type: integer
+              bid_rank:
+                type: integer
+              was_awarded:
+                type: boolean
+              attainability:
+                type: string
+                enum: [high, medium, low, unknown]
+                description: "What the optimizer predicted for this sequence"
+        unmatched_awards:
+          type: array
+          items:
+            type: integer
+          description: SEQ numbers awarded but not in the bid
+        attainability_accuracy:
+          type: object
+          description: "How well the optimizer's seniority estimates performed"
+          properties:
+            high_awarded:
+              type: integer
+              description: "Sequences marked 'high' attainability that were actually awarded"
+            high_total:
+              type: integer
+            low_awarded:
+              type: integer
+              description: "Sequences marked 'low' that were awarded (surprises)"
+            low_total:
+              type: integer
+        insights:
+          type: array
+          items:
+            type: string
+          description: Human-readable insights about bid performance and seniority calibration
+
+    ProjectedScheduleLayer:
+      type: object
+      description: "Best-case projected schedule for a single layer — what the FA's month looks like if top picks are awarded"
+      properties:
+        layer_number:
+          type: integer
+          minimum: 1
+          maximum: 7
+        sequences:
+          type: array
+          items:
+            type: object
+            properties:
+              seq_number:
+                type: integer
+              category:
+                type: string
+              tpay_minutes:
+                type: integer
+              duty_days:
+                type: integer
+              operating_dates:
+                type: array
+                items:
+                  type: integer
+        total_credit_hours:
+          type: number
+          format: float
+          description: "Total credited hours for this projected line"
+        total_days_off:
+          type: integer
+          description: "Number of days with no trips in this projection"
+        working_dates:
+          type: array
+          items:
+            type: integer
+          description: "Days-of-month with trips"
+        off_dates:
+          type: array
+          items:
+            type: integer
+          description: "Days-of-month without trips"
+        schedule_shape:
+          type: string
+          description: "Human-readable summary (e.g., '5 trips, 82.5 credit hours, 14 days off, front-loaded')"
+        within_credit_range:
+          type: boolean
+          description: "Whether total_credit_hours falls within the Line of Time range for the user's line_option"
+
+    CBAValidationResult:
+      type: object
+      properties:
+        is_valid:
+          type: boolean
+          description: "true if no CBA violations detected"
+        violations:
+          type: array
+          items:
+            type: object
+            properties:
+              rule:
+                type: string
+                description: "CBA section reference (e.g., 'CBA §11.B')"
+              severity:
+                type: string
+                enum: [error, warning]
+              message:
+                type: string
+                description: "Human-readable violation description"
+              affected_dates:
+                type: array
+                items:
+                  type: integer
+                description: "Days-of-month affected by this violation"
+              affected_sequences:
+                type: array
+                items:
+                  type: integer
+                description: "SEQ numbers involved in this violation"
+        credit_hour_summary:
+          type: object
+          properties:
+            estimated_credit_hours:
+              type: number
+              format: float
+            line_min:
+              type: integer
+            line_max:
+              type: integer
+            within_range:
+              type: boolean
+        days_off_summary:
+          type: object
+          properties:
+            total_days_off:
+              type: integer
+            minimum_required:
+              type: integer
+            meets_requirement:
+              type: boolean
