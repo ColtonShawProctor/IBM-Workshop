@@ -377,6 +377,129 @@ function TripCard({ entry }: { entry: BuildEntry }) {
   );
 }
 
+// --- Trip colors ---
+
+const TRIP_COLORS = [
+  { bg: 'bg-blue-100', border: 'border-blue-300', text: 'text-blue-800' },
+  { bg: 'bg-emerald-100', border: 'border-emerald-300', text: 'text-emerald-800' },
+  { bg: 'bg-purple-100', border: 'border-purple-300', text: 'text-purple-800' },
+  { bg: 'bg-amber-100', border: 'border-amber-300', text: 'text-amber-800' },
+  { bg: 'bg-rose-100', border: 'border-rose-300', text: 'text-rose-800' },
+  { bg: 'bg-cyan-100', border: 'border-cyan-300', text: 'text-cyan-800' },
+  { bg: 'bg-orange-100', border: 'border-orange-300', text: 'text-orange-800' },
+  { bg: 'bg-indigo-100', border: 'border-indigo-300', text: 'text-indigo-800' },
+  { bg: 'bg-teal-100', border: 'border-teal-300', text: 'text-teal-800' },
+];
+
+// --- Month Grid Calendar ---
+
+interface TripBlock {
+  startDay: number;
+  endDay: number;
+  label: string;    // city abbreviation
+  colorIdx: number;
+}
+
+function MonthCalendar({
+  totalDays,
+  trips,
+  monthStartDow,
+}: {
+  totalDays: number;
+  trips: TripBlock[];
+  monthStartDow: number; // 0=Mon, 6=Sun
+}) {
+  // Build a map: day → trip info (or null for off days)
+  const dayMap = new Map<number, { label: string; colorIdx: number; isStart: boolean; isEnd: boolean }>();
+  for (const trip of trips) {
+    for (let d = trip.startDay; d <= trip.endDay && d <= totalDays; d++) {
+      dayMap.set(d, {
+        label: trip.label,
+        colorIdx: trip.colorIdx,
+        isStart: d === trip.startDay,
+        isEnd: d === trip.endDay || d === totalDays,
+      });
+    }
+  }
+
+  // Build 6-week grid (max needed)
+  const rows: (number | null)[][] = [];
+  let row: (number | null)[] = Array(7).fill(null);
+
+  // Fill leading blanks
+  for (let i = 0; i < monthStartDow; i++) {
+    row[i] = null;
+  }
+
+  for (let d = 1; d <= totalDays; d++) {
+    const col = (monthStartDow + d - 1) % 7;
+    if (col === 0 && d > 1) {
+      rows.push(row);
+      row = Array(7).fill(null);
+    }
+    row[col] = d;
+  }
+  rows.push(row);
+
+  const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  return (
+    <div className="py-3">
+      {/* Day-of-week header */}
+      <div className="grid grid-cols-7 mb-1">
+        {DOW.map(d => (
+          <div key={d} className="text-center text-[10px] font-medium text-gray-400 uppercase">{d}</div>
+        ))}
+      </div>
+
+      {/* Calendar rows */}
+      <div className="space-y-0.5">
+        {rows.map((week, wi) => (
+          <div key={wi} className="grid grid-cols-7">
+            {week.map((day, ci) => {
+              if (day === null) {
+                return <div key={ci} className="h-9" />;
+              }
+
+              const trip = dayMap.get(day);
+              const isWeekend = ci >= 5;
+
+              if (trip) {
+                const c = TRIP_COLORS[trip.colorIdx % TRIP_COLORS.length];
+                return (
+                  <div
+                    key={ci}
+                    className={`h-9 flex flex-col items-center justify-center border-y ${c.bg} ${c.border} ${
+                      trip.isStart ? 'rounded-l-md border-l' : ''
+                    } ${trip.isEnd ? 'rounded-r-md border-r' : ''}`}
+                    title={`Day ${day}: ${trip.label}`}
+                  >
+                    <span className={`text-xs font-semibold ${c.text}`}>{day}</span>
+                    {trip.isStart && (
+                      <span className={`text-[8px] font-bold ${c.text} leading-none`}>{trip.label}</span>
+                    )}
+                  </div>
+                );
+              }
+
+              // Off day
+              return (
+                <div
+                  key={ci}
+                  className={`h-9 flex items-center justify-center ${isWeekend ? 'bg-gray-50' : ''}`}
+                  title={`Day ${day}: Off`}
+                >
+                  <span className="text-xs text-gray-300">{day}</span>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // --- Layer Detail View with expandable trips ---
 
 function LayerDetailView({ buildResult }: { buildResult: GuidedBuildResult }) {
@@ -442,28 +565,53 @@ function LayerDetailView({ buildResult }: { buildResult: GuidedBuildResult }) {
                 <span className="text-gray-400 text-xs flex-shrink-0">{isOpen ? '▾' : '▸'}</span>
               </button>
 
-              {/* Expanded: mini calendar + trip cards */}
+              {/* Expanded: month grid calendar + trip cards */}
               {isOpen && (
                 <div className="px-4 pb-4 border-t border-gray-100">
-                  {/* Mini calendar */}
-                  <div className="flex items-center gap-px py-3" aria-label="Calendar">
-                    {Array.from({ length: 30 }, (_, i) => i + 1).map(d => (
-                      <div
-                        key={d}
-                        className={`rounded-sm ${workDays.has(d) ? 'bg-blue-500' : 'bg-gray-200'}`}
-                        style={{ width: '4px', height: '14px' }}
-                        title={`Day ${d}: ${workDays.has(d) ? 'Working' : 'Off'}`}
-                      />
-                    ))}
-                    <span className="ml-2 text-[10px] text-gray-400">{workDays.size} work / {30 - workDays.size} off</span>
+                  {/* Month grid calendar */}
+                  {(() => {
+                    // Build trip blocks sorted chronologically
+                    const sorted = [...layerEntries].sort((a, b) => {
+                      const aStart = a.chosen_dates?.[0] || a.operating_dates?.[0] || 0;
+                      const bStart = b.chosen_dates?.[0] || b.operating_dates?.[0] || 0;
+                      return aStart - bStart;
+                    });
+                    const tripBlocks: TripBlock[] = sorted.map((entry, idx) => {
+                      const dd = entry.totals?.duty_days || 1;
+                      const startDay = entry.chosen_dates?.[0] || entry.operating_dates?.[0] || 1;
+                      const cities = entry.layover_cities || [];
+                      return {
+                        startDay,
+                        endDay: startDay + dd - 1,
+                        label: cities[0] || 'TRN',
+                        colorIdx: idx,
+                      };
+                    });
+                    // January 2026 starts on Thursday = index 3 (Mon=0)
+                    return <MonthCalendar totalDays={31} trips={tripBlocks} monthStartDow={3} />;
+                  })()}
+
+                  <div className="text-xs text-gray-400 text-center mb-3">
+                    {workDays.size} working days &middot; {30 - workDays.size} days off
                   </div>
 
-                  {/* Trip cards */}
+                  {/* Trip cards in chronological order */}
                   <div className="space-y-1">
                     {layerEntries
-                      .sort((a, b) => a.rank - b.rank)
-                      .map(entry => (
-                        <TripCard key={entry.sequence_id + '-' + entry.layer} entry={entry} />
+                      .sort((a, b) => {
+                        const aStart = a.chosen_dates?.[0] || a.operating_dates?.[0] || 0;
+                        const bStart = b.chosen_dates?.[0] || b.operating_dates?.[0] || 0;
+                        return aStart - bStart;
+                      })
+                      .map((entry, idx) => (
+                        <div key={entry.sequence_id + '-' + entry.layer} className="flex items-start gap-2">
+                          <div
+                            className={`w-2 h-2 rounded-full mt-3.5 flex-shrink-0 ${TRIP_COLORS[idx % TRIP_COLORS.length].bg} border ${TRIP_COLORS[idx % TRIP_COLORS.length].border}`}
+                          />
+                          <div className="flex-1">
+                            <TripCard entry={entry} />
+                          </div>
+                        </div>
                       ))
                     }
                   </div>
