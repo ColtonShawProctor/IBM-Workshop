@@ -9,6 +9,7 @@ import DashboardPage from './pages/DashboardPage';
 import ProfilePage from './pages/ProfilePage';
 import BidPeriodsPage from './pages/BidPeriodsPage';
 import BidPeriodDetailPage from './pages/BidPeriodDetailPage';
+import GuidedBidPage from './pages/GuidedBidPage';
 import SequenceBrowserPage from './pages/SequenceBrowserPage';
 import SequenceDetailPage from './pages/SequenceDetailPage';
 import BidsPage from './pages/BidsPage';
@@ -41,6 +42,7 @@ export default function App() {
               <Route path="/glossary" element={<GlossaryPage />} />
               <Route path="/bid-periods" element={<BidPeriodsPage />} />
               <Route path="/bid-periods/:bidPeriodId" element={<BidPeriodDetailPage />} />
+              <Route path="/bid-periods/:bidPeriodId/guided" element={<GuidedBidPage />} />
               <Route path="/bid-periods/:bidPeriodId/sequences" element={<SequenceBrowserPage />} />
               <Route path="/bid-periods/:bidPeriodId/sequences/compare" element={<SequenceComparisonPage />} />
               <Route path="/bid-periods/:bidPeriodId/sequences/:sequenceId" element={<SequenceDetailPage />} />

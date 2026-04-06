@@ -43,7 +43,7 @@ TOTAL_DATES = 30  # January 2026 bid period days
 DOW_START = 3  # January 1, 2026 = Thursday (0=Mon)
 MIN_DAYS_OFF = 11
 NUM_LAYERS = 7
-BLOCK_LIMIT_7DAY_MIN = 1800  # 30h for analysis
+BLOCK_LIMIT_7DAY_MIN = 1800  # 30h — matches solver constraint
 BLOCK_LIMIT_7DAY_WARN = 1500  # 25h warning threshold
 CITY_DEFAULT = 55
 
@@ -145,6 +145,12 @@ def load_and_run_optimizer():
         seniority_percentage=seniority_pct,
         commute_from=commute_from,
     )
+
+    # optimize_bid now returns (entries, explanation_data) tuple
+    if isinstance(entries, tuple):
+        entries, explanation_data = entries
+    else:
+        explanation_data = None
 
     # Save entries for reference
     with open(os.path.join(os.path.dirname(__file__), "fresh_entries_v3.json"), "w") as f:

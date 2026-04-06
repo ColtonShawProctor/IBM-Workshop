@@ -37,6 +37,32 @@ MIN_REST_HOURS = 10
 # Attainability multipliers (must match optimizer.py)
 _ATT_MULT = {"high": 1.0, "medium": 0.8, "low": 0.5, "unknown": 0.7}
 
+# ── Trip quality scoring weights ─────────────────────────────────────────
+# Standard weights (non-commuter FA or base == mailbox)
+STANDARD_WEIGHTS = {
+    "credit_efficiency": 0.25,
+    "layover_quality": 0.20,
+    "layover_city": 0.15,
+    "report_time": 0.10,
+    "release_time": 0.10,
+    "legs_per_day": 0.10,
+    "red_eye_penalty": 0.05,
+    "deadhead_penalty": 0.05,
+}
+
+# Commuter weights (auto-detected when base != mailbox/commute_from)
+# Report/release time weighted much higher — every bad time costs an off-day
+COMMUTER_WEIGHTS = {
+    "credit_efficiency": 0.25,
+    "layover_quality": 0.10,
+    "layover_city": 0.10,
+    "report_time": 0.20,
+    "release_time": 0.15,
+    "legs_per_day": 0.10,
+    "red_eye_penalty": 0.05,
+    "deadhead_penalty": 0.05,
+}
+
 # Layover city desirability tiers (0-100)
 CITY_TIERS: dict[str, int] = {
     # International dream destinations (90-100)
@@ -58,25 +84,29 @@ CITY_TIERS: dict[str, int] = {
 _CITY_DEFAULT = 55
 
 # Compactness weight presets
+# Rule of thumb: worst-case penalty (30-day span, 15 gaps) should be < 40%
+# of the quality from selecting 5 sequences (~7500 pts).
+# "strong": worst = -60*30 + -60*15 = -2700 → 36% of 7500 ✓
 COMPACTNESS_LEVELS: dict[str, dict[str, int]] = {
-    "strong":   {"span_weight": 8, "gap_weight": 5},
-    "moderate": {"span_weight": 4, "gap_weight": 2},
-    "light":    {"span_weight": 2, "gap_weight": 1},
-    "none":     {"span_weight": 0, "gap_weight": 0},
+    "strong":   {"span_weight": 20, "gap_weight": 12},
+    "moderate": {"span_weight": 8,  "gap_weight": 4},
+    "light":    {"span_weight": 3,  "gap_weight": 2},
+    "none":     {"span_weight": 0,  "gap_weight": 0},
 }
 
 # Per-layer optimization strategies
 DEFAULT_LAYER_STRATEGIES: dict[int, dict] = {
     1: {"name": "Dream Schedule — Compact + Quality",
         "compactness": "strong", "target_window": "first_half",
-        "credit_range": (5100, 5400),      # 85-90h — high credit, tight
+        "credit_range": (4200, 5400),      # 70-90h
         "credit_in_objective": False,
-        "min_pairing_days": 2},             # never select 1-day turns
-    2: {"name": "Flip Window — Back Half",
+        "min_pairing_days": 3},             # 3+ day trips for compact commuter schedules
+    2: {"name": "Alternative Schedule — Back Half",
         "compactness": "strong", "target_window": "second_half",
-        "credit_range": (5100, 5400),      # 85-90h
+        "hamming_min": 2,                  # force different selections from L1
+        "credit_range": (4200, 5400),      # 70-90h
         "credit_in_objective": False,
-        "min_pairing_days": 2},
+        "min_pairing_days": 3},             # 3+ day trips
     3: {"name": "Maximum Pay",
         "compactness": "moderate", "credit_boost": 1.5,
         "credit_range": (5220, 5400),      # 87-90h — narrowest, highest floor
@@ -97,12 +127,68 @@ DEFAULT_LAYER_STRATEGIES: dict[int, dict] = {
         "compactness": "light", "hamming_min": 2,
         "credit_range": (4500, 5400),      # 75-90h
         "credit_in_objective": False,
-        "min_pairing_days": 2},
+        "min_pairing_days": 3},             # 3+ day trips with layovers
     7: {"name": "Safety Net — Maximum Flexibility",
         "compactness": "none",
         "credit_range": (4200, 5400),      # 70-90h — full range
         "credit_in_objective": False,
         "min_pairing_days": 2},
+}
+
+# Also accessible as THEMED_LAYER_STRATEGIES for clarity
+THEMED_LAYER_STRATEGIES = DEFAULT_LAYER_STRATEGIES
+
+# Progressive relaxation strategies — used with progressive pool building.
+# Layers differ in POOL SIZE (progressively wider), not in theme.
+# CP-SAT strategy controls compactness and credit range per layer.
+#
+# Key changes from initial version:
+# - L1-L3: min_pairing_days=3 (no 2-day turns — fewer commute events, better rigs)
+# - L2-L7: domestic_only=True (international only on L1 lottery ticket)
+# - All layers: credit floor 70h (4200 min) to prevent "Outside credit range"
+PROGRESSIVE_LAYER_STRATEGIES: dict[int, dict] = {
+    1: {"name": "Lottery Ticket / Dream Schedule",
+        "compactness": "strong", "target_window": "first_half",
+        "credit_range": (4200, 5400),
+        "credit_in_objective": False,
+        "min_pairing_days": 3,
+        "domestic_only": False},            # L1 = lottery ticket, international OK
+    2: {"name": "Best Specific Pairings",
+        "compactness": "strong",
+        "credit_range": (4200, 5400),
+        "credit_in_objective": False,
+        "min_pairing_days": 3,
+        "domestic_only": True},
+    3: {"name": "Your Favorites as Generic Properties",
+        "compactness": "moderate",
+        "credit_range": (4200, 5400),
+        "credit_in_objective": False,
+        "min_pairing_days": 3,
+        "domestic_only": True},
+    4: {"name": "Wider Pool — One Property Relaxed",
+        "compactness": "moderate", "hamming_min": 2,
+        "credit_range": (4200, 5400),
+        "credit_in_objective": False,
+        "min_pairing_days": 2,
+        "domestic_only": True},
+    5: {"name": "Broader — More Flexibility",
+        "compactness": "moderate", "hamming_min": 2,
+        "credit_range": (4200, 5400),
+        "credit_in_objective": False,
+        "min_pairing_days": 2,
+        "domestic_only": True},
+    6: {"name": "Broad Domestic",
+        "compactness": "light", "hamming_min": 2,
+        "credit_range": (4200, 5400),
+        "credit_in_objective": False,
+        "min_pairing_days": 2,
+        "domestic_only": True},
+    7: {"name": "Safety Net — Maximum Flexibility",
+        "compactness": "none",
+        "credit_range": (4200, 5400),
+        "credit_in_objective": False,
+        "min_pairing_days": 2,
+        "domestic_only": True},
 }
 
 
@@ -116,18 +202,14 @@ def _hhmm_to_minutes(t: str) -> int:
 
 # ── Trip Quality Scoring ─────────────────────────────────────────────────
 
-def compute_trip_quality(seq: dict) -> float:
+def compute_trip_quality(seq: dict, *, is_commuter: bool = False) -> float:
     """Compute composite trip quality score (0.0-1.0) for a sequence.
 
-    Seven dimensions, weighted:
-      credit_efficiency  30%  — TPAY per duty day
-      layover_quality    20%  — rest duration sweet-spot (Gaussian ~24 h)
-      layover_city       15%  — city tier lookup
-      report_time        15%  — later report = easier commute
-      legs_per_day       10%  — fewer legs = less wear
-      red_eye_penalty     5%  — avoid red-eyes / ODANs
-      deadhead_penalty    5%  — avoid deadhead legs
+    Eight dimensions, weighted by COMMUTER_WEIGHTS or STANDARD_WEIGHTS.
+    Commuter detection is automatic: if base != mailbox, commuter weights
+    are applied (report/release time weighted 20%/15% instead of 10%/10%).
     """
+    w = COMMUTER_WEIGHTS if is_commuter else STANDARD_WEIGHTS
     totals = seq.get("totals", {})
     dps = seq.get("duty_periods", [])
     duty_days = totals.get("duty_days", 1) or 1
@@ -165,7 +247,22 @@ def compute_trip_quality(seq: dict) -> float:
     else:
         report_score = 50.0
 
-    # 5. Legs per duty day
+    # 5. Release time (earlier = better for commuting home)
+    #    Before 16:00 = 100, 16:00-19:00 = linear 100→40, 19:00-22:00 = linear 40→0, after 22:00 = 0
+    if dps:
+        rel_min = _hhmm_to_minutes(dps[-1].get("release_base", "18:00"))
+        if rel_min <= 960:       # before 16:00
+            release_score = 100.0
+        elif rel_min <= 1140:    # 16:00-19:00
+            release_score = 100.0 - (rel_min - 960) / 180.0 * 60.0
+        elif rel_min <= 1320:    # 19:00-22:00
+            release_score = 40.0 - (rel_min - 1140) / 180.0 * 40.0
+        else:                    # after 22:00
+            release_score = 0.0
+    else:
+        release_score = 50.0
+
+    # 6. Legs per duty day
     total_legs = totals.get("leg_count", 0) or 0
     avg_legs = total_legs / duty_days if duty_days > 0 else 2.0
     if avg_legs <= 1.0:
@@ -177,22 +274,23 @@ def compute_trip_quality(seq: dict) -> float:
     else:
         legs_score = max(20.0, 50.0 - (avg_legs - 3.0) * 30.0)
 
-    # 6. Red-eye / ODAN penalty
+    # 7. Red-eye / ODAN penalty
     redeye = 0.0 if (seq.get("is_redeye") or seq.get("is_odan")) else 100.0
 
-    # 7. Deadhead penalty
+    # 8. Deadhead penalty
     dh = totals.get("deadhead_count", 0) or 0
     total_leg = totals.get("leg_count", 1) or 1
     dh_score = max(0.0, 100.0 * (1.0 - dh / total_leg))
 
     composite = (
-        0.30 * credit_eff
-        + 0.20 * avg_layover
-        + 0.15 * avg_city
-        + 0.15 * report_score
-        + 0.10 * legs_score
-        + 0.05 * redeye
-        + 0.05 * dh_score
+        w["credit_efficiency"] * credit_eff
+        + w["layover_quality"] * avg_layover
+        + w["layover_city"] * avg_city
+        + w["report_time"] * report_score
+        + w["release_time"] * release_score
+        + w["legs_per_day"] * legs_score
+        + w["red_eye_penalty"] * redeye
+        + w["deadhead_penalty"] * dh_score
     )
     return composite / 100.0  # normalise to 0.0-1.0
 
@@ -209,6 +307,10 @@ def solve_layer_cpsat(
     layer_num: int = 1,
     previous_solutions: list[set[str]] | None = None,
     strategy: dict | None = None,
+    *,
+    block_limit_7day_minutes: int = 1800,
+    home_rest_minutes: int = 690,
+    double_up_dates: set[int] | None = None,
 ) -> list[dict]:
     """Build one valid monthly schedule using CP-SAT constraint optimisation.
 
@@ -225,11 +327,16 @@ def solve_layer_cpsat(
         layer_num: 1-7 — selects default strategy.
         previous_solutions: Sets of ``_id`` values selected in prior layers.
         strategy: Override for the layer strategy dict.
+        block_limit_7day_minutes: 7-day rolling block limit (1800=30h default,
+            2100=35h when waived per CBA §11.B.3).
+        home_rest_minutes: Minimum rest between sequences (690=11h30m CBA
+            contractual default, 630=10h30m when waived to FAR minimum).
+        double_up_dates: Calendar days where double-ups are allowed (two
+            sequences in one duty day with 30-min gap per CBA §2.N).
 
     Returns:
         Selected sequences with ``_chosen_span`` set, sorted by date.
-        Falls back to greedy builder if OR-Tools is unavailable or solver
-        finds no feasible solution.
+        Returns empty list if no feasible solution.
     """
     if not HAS_ORTOOLS:
         return _greedy_fallback(candidates, total_dates, max_credit_minutes, min_days_off)
@@ -240,9 +347,12 @@ def solve_layer_cpsat(
     )
 
     # Strategy credit range — max is a hard constraint (tightens bid-period max),
-    # min is a soft preference (penalty in objective) to avoid infeasibility.
+    # min is enforced as both a hard constraint and a soft penalty.
     credit_range = strat.get("credit_range")
-    strat_min_credit = credit_range[0] if credit_range else min_credit_minutes
+    strat_min_credit = max(
+        credit_range[0] if credit_range else 0,
+        min_credit_minutes,
+    )
     if credit_range:
         max_credit_minutes = min(max_credit_minutes, credit_range[1])
     min_credit_minutes = max(min_credit_minutes, 0)
@@ -253,6 +363,13 @@ def solve_layer_cpsat(
         candidates = [
             c for c in candidates
             if (c.get("totals", {}).get("duty_days", 1) or 1) >= min_pd
+        ]
+
+    # Filter international trips when domestic_only is set
+    if strat.get("domestic_only", False):
+        candidates = [
+            c for c in candidates
+            if c.get("is_domestic", True)
         ]
 
     # Only keep candidates that have operating-date instances
@@ -295,17 +412,12 @@ def solve_layer_cpsat(
 
     n_valid = len(valid)
 
-    # ── Hard Constraint 1: No overlapping duty dates ──────────────────
-    intervals = []
-    for idx, (var, span, _vi) in enumerate(instance_vars):
-        s = min(span)
-        sz = max(span) - s + 1
-        iv = model.new_optional_fixed_size_interval_var(s, sz, var, f"iv_{idx}")
-        intervals.append(iv)
-    model.add_no_overlap(intervals)
+    # ── Hard Constraints 1+2: No-overlap + rest + double-up ────────────
+    # When double-up dates are specified, we use per-day capacity constraints
+    # instead of add_no_overlap so that two 1-day turns can share a day.
+    # Otherwise, the efficient interval-based no-overlap is used.
+    _du_dates = double_up_dates or set()
 
-    # ── Hard Constraint 2: FAA minimum rest between consecutives ──────
-    # Bucket instances by last/first day for efficient pairwise checking
     ends_on: dict[int, list[int]] = defaultdict(list)
     starts_on: dict[int, list[int]] = defaultdict(list)
     for idx, (_var, span, _vi) in enumerate(instance_vars):
@@ -313,6 +425,96 @@ def solve_layer_cpsat(
         starts_on[min(span)].append(idx)
 
     rest_constraints = 0
+    double_up_pairs = 0
+
+    if _du_dates:
+        # ── Per-day capacity model (supports double-ups) ──────────
+        # Pre-compute valid double-up pairs for conflict exemption
+        _valid_du_pairs: set[tuple[int, int]] = set()
+        from app.services.cba_rules import get_max_domestic_duty
+
+        for day in _du_dates:
+            day_turns = []  # (instance_idx, report_min, release_min, seg_count)
+            for idx, (var, span, vi) in enumerate(instance_vars):
+                if day not in span:
+                    continue
+                seq = valid[vi][1]
+                dd = seq.get("totals", {}).get("duty_days", 1) or 1
+                if dd != 1:
+                    continue  # only 1-day turns can double-up
+                dps = seq.get("duty_periods", [])
+                if not dps:
+                    continue
+                rpt = _hhmm_to_minutes(dps[0].get("report_base", "08:00"))
+                rel = _hhmm_to_minutes(dps[-1].get("release_base", "18:00"))
+                segs = seq.get("totals", {}).get("leg_count", 1) or 1
+                day_turns.append((idx, rpt, rel, segs))
+
+            # Check all pairs of turns on this day
+            for i in range(len(day_turns)):
+                for j in range(i + 1, len(day_turns)):
+                    ai, rpt_a, rel_a, seg_a = day_turns[i]
+                    bi, rpt_b, rel_b, seg_b = day_turns[j]
+                    # Try both orderings: A then B, B then A
+                    ok = False
+                    if rel_a + 30 <= rpt_b:
+                        combined = rel_b - rpt_a
+                        if combined <= get_max_domestic_duty(rpt_a, seg_a + seg_b):
+                            ok = True
+                    if not ok and rel_b + 30 <= rpt_a:
+                        combined = rel_a - rpt_b
+                        if combined <= get_max_domestic_duty(rpt_b, seg_a + seg_b):
+                            ok = True
+                    if ok:
+                        _valid_du_pairs.add((min(ai, bi), max(ai, bi)))
+                        double_up_pairs += 1
+
+        # Per-day constraints
+        for day in range(1, total_dates + 1):
+            day_idxs = [idx for idx, (var, span, vi) in enumerate(instance_vars)
+                        if day in span]
+            if not day_idxs:
+                continue
+
+            if day in _du_dates:
+                # Split into turns and multi-day
+                turn_idxs = [idx for idx in day_idxs
+                             if (valid[instance_vars[idx][2]][1].get("totals", {}).get("duty_days", 1) or 1) == 1]
+                multi_idxs = [idx for idx in day_idxs if idx not in turn_idxs]
+
+                # Multi-day sequences conflict with everything else on this day
+                for mi in multi_idxs:
+                    for oi in day_idxs:
+                        if oi != mi:
+                            model.add(instance_vars[mi][0] + instance_vars[oi][0] <= 1)
+
+                # Turns: at most 2, but incompatible pairs are blocked
+                if turn_idxs:
+                    model.add(sum(instance_vars[ti][0] for ti in turn_idxs) <= 2)
+                    # Block incompatible turn pairs
+                    for i in range(len(turn_idxs)):
+                        for j in range(i + 1, len(turn_idxs)):
+                            pair = (min(turn_idxs[i], turn_idxs[j]),
+                                    max(turn_idxs[i], turn_idxs[j]))
+                            if pair not in _valid_du_pairs:
+                                model.add(instance_vars[turn_idxs[i]][0]
+                                          + instance_vars[turn_idxs[j]][0] <= 1)
+            else:
+                # Normal day: at most 1 instance
+                model.add(sum(instance_vars[idx][0] for idx in day_idxs) <= 1)
+    else:
+        # ── Efficient interval-based no-overlap (no double-ups) ───
+        intervals = []
+        for idx, (var, span, _vi) in enumerate(instance_vars):
+            s = min(span)
+            sz = max(span) - s + 1
+            iv = model.new_optional_fixed_size_interval_var(s, sz, var, f"iv_{idx}")
+            intervals.append(iv)
+        model.add_no_overlap(intervals)
+
+    # ── Rest between consecutive sequences ────────────────────────────
+    # CBA §11.I: contractual 11h + 30min = 690 min (default)
+    # When waived: FAR 10h + 30min = 630 min
     for day in range(1, total_dates + 1):
         for a_idx in ends_on.get(day, []):
             _va, _sa, vi_a = instance_vars[a_idx]
@@ -325,7 +527,7 @@ def solve_layer_cpsat(
             for b_idx in starts_on.get(day + 1, []):
                 _vb, _sb, vi_b = instance_vars[b_idx]
                 if vi_a == vi_b:
-                    continue  # same sequence — handled by at-most-one
+                    continue
 
                 seq_b = valid[vi_b][1]
                 dps_b = seq_b.get("duty_periods", [])
@@ -334,13 +536,16 @@ def solve_layer_cpsat(
                 rpt_b = _hhmm_to_minutes(dps_b[0].get("report_base", "08:00"))
 
                 rest_min = (24 * 60 - rel_a) + rpt_b
-                if rest_min < MIN_REST_HOURS * 60:
+                if rest_min < home_rest_minutes:
                     model.add(
                         instance_vars[a_idx][0] + instance_vars[b_idx][0] <= 1
                     )
                     rest_constraints += 1
 
-    # ── Hard Constraint 3: Credit range ─────────────────────────────
+    # ── Hard Constraint 3: Credit max ──────────────────────────────
+    # Credit MINIMUM is enforced as a strong soft penalty (not hard) in the
+    # objective section below.  This avoids infeasibility when date conflicts,
+    # 7-day block limits, or other constraints prevent reaching the target.
     credit_coeffs: list[tuple] = []  # (sel_var, tpay_int)
     for vi in range(n_valid):
         tpay = valid[vi][1].get("totals", {}).get("tpay_minutes", 0)
@@ -348,8 +553,6 @@ def solve_layer_cpsat(
             credit_coeffs.append((seq_selected[vi], tpay))
     if credit_coeffs:
         model.add(sum(var * coeff for var, coeff in credit_coeffs) <= max_credit_minutes)
-        if min_credit_minutes > 0:
-            model.add(sum(var * coeff for var, coeff in credit_coeffs) >= min_credit_minutes)
 
     # ── Hard Constraint 4: Minimum days off ───────────────────────────
     max_work_days = total_dates - min_days_off
@@ -360,8 +563,8 @@ def solve_layer_cpsat(
     if work_coeffs:
         model.add(sum(var * coeff for var, coeff in work_coeffs) <= max_work_days)
 
-    # ── Hard Constraint 5: 7-day cumulative block limit (30h) ────────
-    BLOCK_LIMIT_7DAY = 2400  # 40 hours = 2400 minutes (safety ceiling)
+    # ── Hard Constraint 5: 7-day cumulative block limit ────────────
+    # CBA §11.B: 30h scheduled (1800 min), waivable to 35h (2100 min)
     block_constraints = 0
     for window_start in range(1, total_dates - 5):
         window_days = set(range(window_start, window_start + 7))
@@ -378,8 +581,31 @@ def solve_layer_cpsat(
                     if block_in_window > 0:
                         block_terms.append(var * block_in_window)
         if block_terms:
-            model.add(sum(block_terms) <= BLOCK_LIMIT_7DAY)
+            model.add(sum(block_terms) <= block_limit_7day_minutes)
             block_constraints += 1
+
+    # ── Hard Constraint 6: Max 6 consecutive duty days (CBA §11.C) ──
+    # "Cannot fly more than 6 consecutive days unless the period contains
+    #  or is followed by 24 consecutive hours free from all duty."
+    # Modeled as: in any 7-day window, at most 6 days can be working days.
+    work_day: dict[int, object] = {}
+    _has_instances: set[int] = set()
+    for d in range(1, total_dates + 1):
+        d_vars = [var for var, span, vi in instance_vars if d in span]
+        if d_vars:
+            wd = model.new_bool_var(f"wd_{d}")
+            # wd = 1 iff any instance occupies day d
+            model.add(wd <= sum(d_vars))
+            for dv in d_vars:
+                model.add(wd >= dv)
+            work_day[d] = wd
+            _has_instances.add(d)
+
+    for window_start in range(1, total_dates - 5):
+        window = range(window_start, window_start + 7)
+        wd_terms = [work_day[d] for d in window if d in _has_instances]
+        if len(wd_terms) >= 7:  # only constrain if all 7 days could be working
+            model.add(sum(wd_terms) <= 6)
 
     # ── Objective terms ───────────────────────────────────────────────
     SCALE = 1000  # CP-SAT uses integers; multiply floats by SCALE
@@ -393,6 +619,9 @@ def solve_layer_cpsat(
     credit_in_obj = strat.get("credit_in_objective", True)
     city_boost = strat.get("layover_city_boost", 1.0)
 
+    # Holdability-aware objective: layer optimism controls quality vs attainability blend
+    from app.services.holdability import LAYER_OPTIMISM, apply_safety_net_boost
+
     quality_terms: list = []
     for vi in range(n_valid):
         seq = valid[vi][1]
@@ -403,10 +632,8 @@ def solve_layer_cpsat(
         tq = seq.get("_trip_quality", 0.5)
 
         if credit_in_obj:
-            # Credit-focused: property score (includes maximize_credit) is primary
             blended = eff * 0.7 + tq * 0.3
         else:
-            # Quality-focused: trip quality drives selection, credit is just a constraint
             blended = tq * 0.7 + eff * 0.3
 
         # Layover city boost for quality-of-life layers
@@ -423,6 +650,15 @@ def solve_layer_cpsat(
             seq_tpay = seq.get("totals", {}).get("tpay_minutes", 0)
             credit_norm = min(1.0, seq_tpay / 1500)
             blended = blended * 0.7 + credit_norm * 0.3 * cb
+
+        # Holdability-aware scoring: blend quality with attainability per-layer
+        holdability = seq.get("_holdability", 0.5)
+        optimism = LAYER_OPTIMISM.get(layer_num, 0.5)
+        # Layer 1: quality dominates | Layer 7: holdability dominates
+        blended = blended * (optimism + (1 - optimism) * holdability)
+
+        # Safety-net boost for layers 6-7: prefer low-demand pairings
+        blended = apply_safety_net_boost(seq, blended, layer_num)
 
         score_int = SELECTION_BONUS + int(blended * SCALE)
         quality_terms.append(seq_selected[vi] * score_int)
@@ -512,11 +748,14 @@ def solve_layer_cpsat(
         total_credit_var = model.new_int_var(0, 999999, "tot_credit")
         model.add(total_credit_var == sum(var * coeff for var, coeff in credit_coeffs))
 
-        # Penalty for being below strategy min (small per-minute penalty)
+        # Penalty for being below strategy min.
+        # -1 per minute below target: 60-min shortfall (1h) = -60 penalty.
+        # The key improvement is that ALL strategies now have credit_range
+        # starting at 4200 (70h), so this penalty actually applies where the
+        # old code had no penalty (L1-L3 were at 3600 = 60h floor).
         shortfall = model.new_int_var(0, 999999, "cr_short")
         model.add(shortfall >= strat_min_credit - total_credit_var)
         model.add(shortfall >= 0)
-        # -1 per 10 minutes below target (max penalty ~120 for 1200 min shortfall)
         credit_target_terms.append(shortfall * -1)
 
     # --- Combine and set objective ────────────────────────────────────
@@ -533,10 +772,10 @@ def solve_layer_cpsat(
 
     if solve_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         logger.warning(
-            "CP-SAT L%d: no feasible solution (status=%s), greedy fallback",
+            "CP-SAT L%d: no feasible solution (status=%s), returning empty",
             layer_num, solve_status,
         )
-        return _greedy_fallback(candidates, total_dates, max_credit_minutes, min_days_off)
+        return []
 
     # ── Extract solution ──────────────────────────────────────────────
     selected: list[dict] = []

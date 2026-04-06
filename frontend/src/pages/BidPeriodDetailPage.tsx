@@ -360,7 +360,11 @@ export default function BidPeriodDetailPage() {
       {isCompleted && (
         <>
           {/* Quick nav */}
-          <div className="flex gap-3 text-sm">
+          <div className="flex gap-3 text-sm flex-wrap">
+            <Link to={`/bid-periods/${bp.id}/guided`}
+              className="rounded-md bg-blue-600 text-white px-5 py-2 font-semibold hover:bg-blue-700 transition-colors shadow-sm">
+              Build My Bid
+            </Link>
             <Link to={`/bid-periods/${bp.id}/sequences`}
               className="rounded-md border border-gray-200 bg-white px-4 py-2 hover:border-blue-300 transition-colors">
               Browse {bp.total_sequences} Sequences

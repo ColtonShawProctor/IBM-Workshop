@@ -371,7 +371,7 @@ class TestOptimizeBidWithProperties:
     def test_no_properties_uses_7_layers(self):
         """bid_properties=None → still 7 layers (no more 9-layer legacy)."""
         seqs = [_full_seq(i, [i * 3 + 1, i * 3 + 2]) for i in range(5)]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs,
             prefs={},
             seniority_number=500,
@@ -389,7 +389,7 @@ class TestOptimizeBidWithProperties:
         """bid_properties=[...] → max layer is 7."""
         seqs = [_full_seq(i, [i * 3 + 1, i * 3 + 2]) for i in range(5)]
         props = [_prop("prefer_pairing_length", 2, layers=[1, 2, 3, 4, 5, 6, 7])]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs,
             prefs={},
             seniority_number=500,
@@ -411,7 +411,7 @@ class TestOptimizeBidWithProperties:
             _full_seq(3, [10, 11, 12], is_ipd=True),
         ]
         props = [_prop("prefer_pairing_type", "ipd", layers=[1])]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs,
             prefs={},
             seniority_number=500,

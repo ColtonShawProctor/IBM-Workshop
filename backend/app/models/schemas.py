@@ -730,3 +730,114 @@ class AwardAnalysis(BaseModel):
     unmatched_awards: List[int] = Field(default_factory=list)
     attainability_accuracy: AttainabilityAccuracy = Field(default_factory=AttainabilityAccuracy)
     insights: List[str] = Field(default_factory=list)
+
+
+# ── Monthly Award Records (Holdability Calibration) ────────────────────────
+
+
+class AwardedPairingRecord(BaseModel):
+    """One pairing from a monthly PBS award — used for holdability calibration."""
+    seq_number: int
+    award_code: str             # P1-P7, PN, CN
+    credit_minutes: int = 0
+    layover_cities: List[str] = Field(default_factory=list)
+    duty_days: int = 0
+
+
+class MonthlyAwardInput(BaseModel):
+    """Input for recording one month's PBS award results."""
+    month: str                  # "2026-04"
+    total_credit_minutes: int = 0
+    line_label: str = ""        # "P3" or "L3"
+    pairings: List[AwardedPairingRecord] = Field(default_factory=list)
+    lost_seq_numbers: List[int] = Field(default_factory=list)  # wanted but didn't get
+    notes: Optional[str] = None
+
+    @field_validator("month", mode="before")
+    @classmethod
+    def validate_month(cls, v: str) -> str:
+        if not v or len(v) < 7:
+            raise ValueError("month must be YYYY-MM format (e.g., '2026-04')")
+        return v
+
+
+class MonthlyAwardRecord(BaseModel):
+    """Stored monthly award record with metadata."""
+    id: str
+    user_id: str
+    bid_period_id: Optional[str] = None
+    month: str
+    seniority_number: Optional[int] = None
+    total_base_fas: Optional[int] = None
+    total_credit_minutes: int = 0
+    line_label: str = ""
+    pairings: List[AwardedPairingRecord] = Field(default_factory=list)
+    lost_seq_numbers: List[int] = Field(default_factory=list)
+    notes: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+# ── Holdability & Explanation Models ───────────────────────────────────────
+
+
+class PairingRationaleModel(BaseModel):
+    """Per-pairing explanation returned in API responses."""
+    sequence_id: str
+    seq_number: int = 0
+    layer: int = 0
+    reasons_selected: List[str] = Field(default_factory=list)
+    reasons_not_alternatives: List[str] = Field(default_factory=list)
+    holdability: str = "UNKNOWN"
+    holdability_pct: float = 50.0
+    trade_offs: List[str] = Field(default_factory=list)
+
+
+class LayerExplanation(BaseModel):
+    """Per-layer explanation with narrative, calendar, rationales, PBS translation."""
+    layer_num: int
+    narrative: str = ""
+    calendar_grid: str = ""
+    rationales: List[PairingRationaleModel] = Field(default_factory=list)
+    pbs_translation: str = ""
+    holdability_pct: float = 50.0
+    tips: List[str] = Field(default_factory=list)
+
+
+class HoldabilityLayerReport(BaseModel):
+    """Per-layer holdability assessment."""
+    layer_num: int
+    strategy_name: str = ""
+    credit_hours: float = 0.0
+    holdability_pct: float = 50.0
+    holdability_category: str = "UNKNOWN"
+    verdict: str = ""
+    most_contested_seq: Optional[int] = None
+    pool_size: int = 0
+
+
+class HoldabilityReport(BaseModel):
+    """Overall seniority-aware holdability assessment."""
+    seniority_label: str = ""
+    seniority_pct: float = 0.5
+    seniority_display: str = ""
+    layers: List[HoldabilityLayerReport] = Field(default_factory=list)
+    best_realistic_layers: List[int] = Field(default_factory=list)
+    recommendation: str = ""
+    trend: Optional[str] = None
+    calibration_months: int = 0
+
+
+class CrossLayerSummary(BaseModel):
+    """Cross-layer comparison data."""
+    credit_spread: List[dict[str, Any]] = Field(default_factory=list)
+    diversity_matrix: List[dict[str, Any]] = Field(default_factory=list)
+    strategy_fulfillment: List[dict[str, Any]] = Field(default_factory=list)
+
+
+class OptimizationExplanation(BaseModel):
+    """Complete explanation output attached to optimization results."""
+    holdability_report: Optional[HoldabilityReport] = None
+    layers: List[LayerExplanation] = Field(default_factory=list)
+    cross_layer_summary: Optional[CrossLayerSummary] = None
+    recommendation: str = ""
+    monthly_prompt: str = ""

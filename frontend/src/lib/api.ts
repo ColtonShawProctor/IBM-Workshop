@@ -308,4 +308,112 @@ export async function deleteFilterPreset(bidPeriodId: string, presetId: string):
   await api.delete(`/bid-periods/${bidPeriodId}/filter-presets/${presetId}`);
 }
 
+// ── Guided Bid Flow ────────────────────────────────────────────────────
+
+export interface GuidedCriteria {
+  trip_lengths: number[];
+  preferred_cities: string[];
+  avoided_cities: string[];
+  report_earliest_minutes: number | null;
+  release_latest_minutes: number | null;
+  credit_min_minutes: number;
+  credit_max_minutes: number;
+  days_off: number[];
+  avoid_redeyes: boolean;
+  schedule_preference: 'first_half' | 'second_half' | 'best';
+}
+
+export interface PoolCountResult {
+  total_matching: number;
+  by_trip_length: Record<string, number>;
+  by_city_top10: { city: string; count: number }[];
+}
+
+export interface RankedTrip {
+  sequence_id: string;
+  seq_number: number;
+  category: string;
+  duty_days: number;
+  tpay_minutes: number;
+  credit_hours: number;
+  operating_dates: number[];
+  layover_cities: string[];
+  report_time: string;
+  release_time: string;
+  equipment: string[];
+  is_redeye: boolean;
+  is_odan: boolean;
+  match_score: number;
+  match_reasons: string[];
+  holdability_pct: number;
+  holdability_label: string;
+  commute_impact: 'green' | 'yellow' | 'red';
+}
+
+export interface RankedTripsResult {
+  trips: RankedTrip[];
+  total_matching: number;
+  showing: number;
+}
+
+export interface ConflictPair {
+  seq_a_id: string;
+  seq_a_number: number;
+  seq_b_id: string;
+  seq_b_number: number;
+  overlap_dates: number[];
+}
+
+export interface GuidedBuildResult {
+  bid_id: string;
+  status: string;
+  total_entries: number;
+  layer_summary: {
+    layer: number;
+    sequences: number;
+    pool_size: number;
+    credit_hours: number;
+    holdability_pct: number;
+  }[];
+  explanation: Record<string, unknown> | null;
+  entries: Record<string, unknown>[];
+}
+
+export async function guidedPoolCount(bidPeriodId: string, criteria: GuidedCriteria): Promise<PoolCountResult> {
+  const res = await api.post(`/bid-periods/${bidPeriodId}/guided/pool-count`, criteria);
+  return res.data;
+}
+
+export async function guidedRankedTrips(
+  bidPeriodId: string,
+  criteria: GuidedCriteria & { sort_by?: string; limit?: number; offset?: number },
+): Promise<RankedTripsResult> {
+  const res = await api.post(`/bid-periods/${bidPeriodId}/guided/ranked-trips`, criteria);
+  return res.data;
+}
+
+export async function guidedCheckConflicts(
+  bidPeriodId: string,
+  selectedIds: string[],
+): Promise<{ conflicts: ConflictPair[]; total_conflicts: number }> {
+  const res = await api.post(`/bid-periods/${bidPeriodId}/guided/check-conflicts`, {
+    selected_sequence_ids: selectedIds,
+  });
+  return res.data;
+}
+
+export async function guidedBuild(
+  bidPeriodId: string,
+  selectedIds: string[],
+  criteria?: GuidedCriteria,
+  bidId?: string,
+): Promise<GuidedBuildResult> {
+  const res = await api.post(`/bid-periods/${bidPeriodId}/guided/build`, {
+    selected_sequence_ids: selectedIds,
+    criteria,
+    bid_id: bidId,
+  });
+  return res.data;
+}
+
 export default api;

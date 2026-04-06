@@ -34,6 +34,8 @@ from app.routes.bids import router as bids_router
 from app.routes.bookmarks import router as bookmarks_router
 from app.routes.filter_presets import router as filter_presets_router
 from app.routes.awarded_schedules import router as awarded_schedules_router
+from app.routes.awards import router as awards_router
+from app.routes.guided import router as guided_router
 
 app.include_router(auth_router)
 app.include_router(users_router)
@@ -43,6 +45,8 @@ app.include_router(bids_router)
 app.include_router(bookmarks_router)
 app.include_router(filter_presets_router)
 app.include_router(awarded_schedules_router)
+app.include_router(awards_router)
+app.include_router(guided_router)
 
 
 @app.get("/")

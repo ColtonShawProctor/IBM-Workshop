@@ -36,6 +36,25 @@ def _hhmm_to_minutes(t: str) -> int:
     return int(parts[0]) * 60 + int(parts[1])
 
 
+def _extract_day_from_property(value, total_dates: int) -> int | None:
+    """Convert a property value (int day number or date string) to a day number."""
+    if isinstance(value, int):
+        return value if 1 <= value <= total_dates else None
+    if isinstance(value, str):
+        # Try as day number first
+        try:
+            d = int(value)
+            return d if 1 <= d <= total_dates else None
+        except ValueError:
+            pass
+        # Try as date string "YYYY-MM-DD" — extract day of month
+        try:
+            return int(value.split("-")[2])
+        except (IndexError, ValueError):
+            return None
+    return None
+
+
 def _all_possible_date_spans(seq: dict) -> list[set[int]]:
     """Return a list of date-spans, one per OPS instance.
 
@@ -251,22 +270,87 @@ ATTAINABILITY_MULT = {"high": 1.0, "medium": 0.8, "low": 0.5, "unknown": 0.7}
 def estimate_attainability(
     seq: dict, seniority_number: int, total_base_fas: int, user_langs: list[str],
     seniority_percentage: float | None = None,
+    all_sequences: list[dict] | None = None,
 ) -> str:
+    """Estimate attainability using seniority-aware holdability model.
+
+    Uses Level 1 heuristic from holdability.py when seniority data is available.
+    When Level 3 empirical survival curves are cached, blends 80% empirical +
+    20% heuristic for improved accuracy.
+    Also stores the numeric holdability on seq["_holdability"] for use by the
+    explainer and CP-SAT objective.
+    """
+    from app.services.holdability import (
+        compute_attainability as compute_att,
+        compute_pairing_desirability,
+        compute_pool_supply,
+        get_cached_survival_curves,
+        lookup_survival,
+    )
+
     # Use seniority_percentage directly if provided (from PBS portal)
     if seniority_percentage is not None:
         percentile = seniority_percentage / 100.0
     elif total_base_fas and total_base_fas > 0:
         percentile = seniority_number / total_base_fas
     else:
+        seq["_holdability"] = 0.5
         return "unknown"
-    ops = seq.get("ops_count", 1)
+
+    # Compute desirability and pool supply for Level 1 holdability
+    desirability = compute_pairing_desirability(seq)
+    pool_supply = compute_pool_supply(seq, all_sequences) if all_sequences else 10
+
+    # Level 1 holdability (numeric 0.0-1.0)
+    heuristic_att = compute_att(
+        seniority_number, total_base_fas, desirability, pool_supply,
+        seniority_percentage=seniority_percentage,
+    )
+
+    # Language bonus -- language-qualified sequences have less competition
     lang = seq.get("language")
-    lang_bonus = 0.3 if (lang and lang in user_langs) else 0.0
-    ops_factor = min(ops / 25.0, 1.0)
-    score = (1.0 - percentile) + ops_factor * 0.5 + lang_bonus
-    if score >= 1.0:
+    if lang and lang in user_langs:
+        heuristic_att = min(1.0, heuristic_att + 0.15)
+
+    # OPS count bonus -- more instances = more likely to survive
+    ops = seq.get("ops_count", 1)
+    ops_bonus = min(ops / 25.0, 1.0) * 0.1
+    heuristic_att = min(1.0, heuristic_att + ops_bonus)
+
+    # Level 3: blend with empirical survival curves if available
+    curves = get_cached_survival_curves()
+    if curves:
+        # Extract report time from first duty period
+        dps = seq.get("duty_periods", [])
+        report_time = ""
+        if dps:
+            rpt_str = dps[0].get("report_base", "")
+            report_time = rpt_str.replace(":", "")
+
+        # Block minutes for credit band classification
+        totals = seq.get("totals", {})
+        block_min = totals.get("block_minutes", 0) or totals.get("tpay_minutes", 0) or 0
+
+        empirical = lookup_survival(
+            curves, percentile,
+            block_minutes=block_min,
+            report_time=report_time,
+        )
+        if empirical is not None:
+            # 80% empirical + 20% heuristic
+            numeric_att = 0.8 * empirical + 0.2 * heuristic_att
+        else:
+            numeric_att = heuristic_att
+    else:
+        numeric_att = heuristic_att
+
+    # Store numeric holdability for explainer and CP-SAT
+    seq["_holdability"] = round(numeric_att, 3)
+
+    # Map to categorical for backward compatibility
+    if numeric_att >= 0.70:
         return "high"
-    elif score >= 0.6:
+    elif numeric_att >= 0.40:
         return "medium"
     else:
         return "low"
@@ -572,6 +656,491 @@ def annotate_commute(entries: list[dict], sequences: list[dict], commute_from: s
         entry["commute_notes"] = notes
 
 
+# ── Progressive Relaxation Engine ─────────────────────────────────────────
+#
+# Default layer strategy: L1 dream → L2 specific → L3 generic(L2) → L4-L7
+# progressively widening pools.  Each subsequent layer's pool is a strict
+# superset of the prior layer (hard gate — auto-fixed if violated).
+
+
+POOL_SIZE_TARGETS: dict[int, tuple[int, int]] = {
+    3: (40, 80),       # Generic version of L2 — enough combos for PBS
+    4: (80, 150),      # Widen one property
+    5: (150, 300),     # Widen further
+    6: (300, 600),     # Broad domestic
+    7: (800, 99999),   # Safety net — everything except garbage
+}
+
+
+def auto_select_l2_picks(
+    sequences: list[dict],
+    max_picks: int = 25,
+) -> list[dict]:
+    """Auto-select top 15-25 pairings for L2 when FA hasn't hand-picked.
+
+    Uses trip quality × holdability composite.  Prefers 3-4 day trips for
+    compact schedules.
+    """
+    scored = []
+    for seq in sequences:
+        tq = seq.get("_trip_quality", 0.5)
+        hold = seq.get("_holdability", 0.5)
+        dd = seq.get("totals", {}).get("duty_days", 1) or 1
+        # Prefer 3-4 day trips (0.2 bonus), penalise 1-day turns
+        length_bonus = 0.2 if dd in (3, 4) else (0.0 if dd >= 2 else -0.1)
+        composite = tq * 0.5 + hold * 0.3 + length_bonus
+        scored.append((composite, seq))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [seq for _, seq in scored[:max_picks]]
+
+
+def derive_generic_properties(selections: list[dict]) -> dict:
+    """Analyze FA's hand-picked L2 pairings and extract common properties.
+
+    These properties define what the FA LIKES about her picks.  Applied as
+    generic PBS filters in L3, they capture the same quality of trip while
+    giving PBS many more options to build a legal line.
+
+    Returns dict with keys: trip_lengths, layover_cities, report_range,
+    release_range, credit_range, equipment.  Values are None when there's
+    insufficient data to derive a meaningful filter.
+    """
+    if not selections:
+        return {}
+
+    from collections import Counter
+
+    # ── Trip lengths (all unique duty-day counts) ──
+    trip_lengths = sorted(set(
+        s.get("totals", {}).get("duty_days", 1) or 1 for s in selections
+    ))
+
+    # ── Layover cities — most common (top 10) ──
+    city_counts: Counter = Counter()
+    for s in selections:
+        for c in s.get("layover_cities", []):
+            city_counts[c] += 1
+    top_cities = [c for c, _ in city_counts.most_common(10)] or None
+
+    # ── Report time range (10th–90th percentile) ──
+    report_times: list[int] = []
+    for s in selections:
+        dps = s.get("duty_periods", [])
+        if dps:
+            rpt = _hhmm_to_minutes(dps[0].get("report_base", "12:00"))
+            report_times.append(rpt)
+    report_times.sort()
+    if len(report_times) >= 3:
+        p10 = report_times[max(0, int(len(report_times) * 0.1))]
+        p90 = report_times[min(len(report_times) - 1, int(len(report_times) * 0.9))]
+        report_range: tuple[int, int] | None = (p10, p90)
+    else:
+        report_range = None
+
+    # ── Release time range (10th–90th percentile) ──
+    release_times: list[int] = []
+    for s in selections:
+        dps = s.get("duty_periods", [])
+        if dps:
+            rel = _hhmm_to_minutes(dps[-1].get("release_base", "18:00"))
+            release_times.append(rel)
+    release_times.sort()
+    if len(release_times) >= 3:
+        p10 = release_times[max(0, int(len(release_times) * 0.1))]
+        p90 = release_times[min(len(release_times) - 1, int(len(release_times) * 0.9))]
+        release_range: tuple[int, int] | None = (p10, p90)
+    else:
+        release_range = None
+
+    # ── Per-pairing credit range (min×0.9 .. max×1.1) ──
+    credits = [
+        s.get("totals", {}).get("tpay_minutes", 0)
+        for s in selections
+        if s.get("totals", {}).get("tpay_minutes", 0) > 0
+    ]
+    credit_range: tuple[int, int] | None = None
+    if credits:
+        credit_range = (int(min(credits) * 0.9), int(max(credits) * 1.1))
+
+    # ── Equipment types ──
+    equipment: set[str] = set()
+    for s in selections:
+        for dp in s.get("duty_periods", []):
+            for lg in dp.get("legs", []):
+                eq = lg.get("equipment")
+                if eq:
+                    equipment.add(eq)
+
+    return {
+        "trip_lengths": trip_lengths,
+        "layover_cities": top_cities,
+        "report_range": report_range,
+        "release_range": release_range,
+        "credit_range": credit_range,
+        "equipment": sorted(equipment) if equipment else None,
+    }
+
+
+def apply_generic_filter(all_sequences: list[dict], properties: dict) -> list[dict]:
+    """Filter sequences using derived generic properties.
+
+    A sequence passes if it matches ALL active (non-None) properties.
+    Properties set to None are skipped (no filter).
+    """
+    result = []
+    for seq in all_sequences:
+        # Trip length
+        tl = properties.get("trip_lengths")
+        if tl:
+            dd = seq.get("totals", {}).get("duty_days", 1) or 1
+            if dd not in tl:
+                continue
+
+        # Report time window
+        rr = properties.get("report_range")
+        if rr:
+            dps = seq.get("duty_periods", [])
+            if dps:
+                rpt = _hhmm_to_minutes(dps[0].get("report_base", "12:00"))
+                if rpt < rr[0] or rpt > rr[1]:
+                    continue
+
+        # Release time window
+        rl = properties.get("release_range")
+        if rl:
+            dps = seq.get("duty_periods", [])
+            if dps:
+                rel = _hhmm_to_minutes(dps[-1].get("release_base", "18:00"))
+                if rel < rl[0] or rel > rl[1]:
+                    continue
+
+        # Layover cities (at least one match; turns with no layovers pass)
+        lc = properties.get("layover_cities")
+        if lc:
+            cities = seq.get("layover_cities", [])
+            if cities and not any(c in lc for c in cities):
+                continue
+
+        # Equipment
+        eq_filter = properties.get("equipment")
+        if eq_filter:
+            seq_eq: set[str] = set()
+            for dp in seq.get("duty_periods", []):
+                for lg in dp.get("legs", []):
+                    eq = lg.get("equipment")
+                    if eq:
+                        seq_eq.add(eq)
+            if seq_eq and not (seq_eq & set(eq_filter)):
+                continue
+
+        # Per-pairing credit range
+        cr = properties.get("credit_range")
+        if cr:
+            tpay = seq.get("totals", {}).get("tpay_minutes", 0)
+            if tpay < cr[0] or tpay > cr[1]:
+                continue
+
+        result.append(seq)
+    return result
+
+
+def _count_filter_impact(
+    all_sequences: list[dict], properties: dict, prop_key: str,
+) -> int:
+    """Count how many MORE sequences pass if *prop_key* is removed."""
+    with_prop = len(apply_generic_filter(all_sequences, properties))
+    relaxed = {k: v for k, v in properties.items() if k != prop_key and v is not None}
+    without_prop = len(apply_generic_filter(all_sequences, relaxed))
+    return without_prop - with_prop
+
+
+def relax_properties_for_layer(
+    base_properties: dict,
+    all_sequences: list[dict],
+    layer_num: int,
+) -> tuple[dict, list[dict], list[str]]:
+    """Progressively relax properties to hit pool-size targets.
+
+    Relaxation strategy:
+    1. For L6-L7: aggressive widening (broad domestic / safety net)
+    2. For L3-L5: measure each property's restrictiveness, relax the
+       most restrictive first.  Widen before dropping when possible.
+
+    Returns (relaxed_properties, filtered_pool, relaxation_notes).
+    """
+    target_min, _ = POOL_SIZE_TARGETS.get(layer_num, (40, 99999))
+
+    # L6: Broad domestic — 2+ day trips only
+    if layer_num == 6:
+        props: dict = {"trip_lengths": [2, 3, 4, 5]}
+        pool = apply_generic_filter(all_sequences, props)
+        return props, pool, [f"Broad domestic filter → {len(pool)} pairings"]
+
+    # L7: Safety net — everything except ODANs
+    if layer_num >= 7:
+        props = {}  # no filters = everything
+        pool = list(all_sequences)
+        return props, pool, [f"Safety net — all {len(pool)} pairings"]
+
+    # L3-L5: Start from base properties, relax as needed
+    props = {k: v for k, v in base_properties.items() if v is not None}
+    pool = apply_generic_filter(all_sequences, props)
+    notes: list[str] = []
+
+    if len(pool) >= target_min:
+        notes.append(f"Derived properties yield {len(pool)} pairings (target: {target_min}+)")
+        return props, pool, notes
+
+    # Sort by actual impact — relax the MOST restrictive filter first
+    relaxable = [
+        ("layover_cities", "layover city filter"),
+        ("credit_range", "per-pairing credit range"),
+        ("report_range", "report time window"),
+        ("release_range", "release time window"),
+        ("equipment", "equipment filter"),
+        ("trip_lengths", "trip length filter"),
+    ]
+    impacts = []
+    for prop_key, desc in relaxable:
+        if prop_key in props and props[prop_key] is not None:
+            impact = _count_filter_impact(all_sequences, props, prop_key)
+            impacts.append((impact, prop_key, desc))
+    impacts.sort(reverse=True)
+
+    for _impact, prop_key, desc in impacts:
+        if len(pool) >= target_min:
+            break
+
+        # Try widening before dropping
+        widened = False
+        if prop_key == "report_range" and props.get("report_range"):
+            lo, hi = props["report_range"]
+            new_range = (max(0, lo - 120), min(1440, hi + 120))
+            test = dict(props)
+            test["report_range"] = new_range
+            test_pool = apply_generic_filter(all_sequences, test)
+            if len(test_pool) > len(pool):
+                props = test
+                pool = test_pool
+                notes.append(
+                    f"Widened report time to "
+                    f"{new_range[0]//60:02d}:{new_range[0]%60:02d}"
+                    f"–{new_range[1]//60:02d}:{new_range[1]%60:02d} "
+                    f"→ {len(pool)} pairings"
+                )
+                widened = True
+                if len(pool) >= target_min:
+                    continue
+
+        if prop_key == "release_range" and props.get("release_range") and not widened:
+            lo, hi = props["release_range"]
+            new_range = (max(0, lo - 120), min(1440, hi + 120))
+            test = dict(props)
+            test["release_range"] = new_range
+            test_pool = apply_generic_filter(all_sequences, test)
+            if len(test_pool) > len(pool):
+                props = test
+                pool = test_pool
+                notes.append(f"Widened release time → {len(pool)} pairings")
+                widened = True
+                if len(pool) >= target_min:
+                    continue
+
+        if prop_key == "trip_lengths" and props.get("trip_lengths") and not widened:
+            current = set(props["trip_lengths"])
+            expanded = set(current)
+            for tl in list(current):
+                if tl - 1 >= 2:
+                    expanded.add(tl - 1)
+                expanded.add(tl + 1)
+            test = dict(props)
+            test["trip_lengths"] = sorted(expanded)
+            test_pool = apply_generic_filter(all_sequences, test)
+            if len(test_pool) > len(pool):
+                added_lengths = sorted(expanded - current)
+                props = test
+                pool = test_pool
+                notes.append(f"Added {added_lengths}-day trips → {len(pool)} pairings")
+                widened = True
+                if len(pool) >= target_min:
+                    continue
+
+        if prop_key == "credit_range" and props.get("credit_range") and not widened:
+            lo, hi = props["credit_range"]
+            test = dict(props)
+            test["credit_range"] = (int(lo * 0.75), int(hi * 1.25))
+            test_pool = apply_generic_filter(all_sequences, test)
+            if len(test_pool) > len(pool):
+                props = test
+                pool = test_pool
+                notes.append(f"Widened credit range → {len(pool)} pairings")
+                widened = True
+                if len(pool) >= target_min:
+                    continue
+
+        # Widen didn't help enough or wasn't applicable — drop the filter
+        if not widened:
+            props.pop(prop_key, None)
+            pool = apply_generic_filter(all_sequences, props)
+            notes.append(f"Dropped {desc} → {len(pool)} pairings")
+
+    if not notes:
+        notes.append(f"Properties yield {len(pool)} pairings")
+
+    return props, pool, notes
+
+
+def ensure_superset(
+    curr_pool: list[dict],
+    prev_pool_ids: set[str],
+    all_sequences_by_id: dict[str, dict],
+) -> tuple[list[dict], list[str]]:
+    """Hard gate: ensure current pool is a strict superset of previous pool.
+
+    Adds any missing sequences from the previous layer.  Returns
+    (fixed_pool, list_of_added_ids).
+    """
+    curr_ids = {s["_id"] for s in curr_pool}
+    missing = prev_pool_ids - curr_ids
+
+    if not missing:
+        return curr_pool, []
+
+    added: list[str] = []
+    for mid in sorted(missing):
+        if mid in all_sequences_by_id:
+            curr_pool.append(all_sequences_by_id[mid])
+            added.append(mid)
+
+    logger.info(
+        "Superset fix: added %d pairings from prior layer", len(added),
+    )
+    return curr_pool, added
+
+
+def pool_health_check(pool_size: int, layer_num: int) -> dict:
+    """Assess pool health for a layer.  Returns status dict."""
+    if layer_num == 1:
+        return {"status": "ok", "note": "Lottery ticket — pool size doesn't matter"}
+    if layer_num == 2:
+        if pool_size < 15:
+            return {"status": "critical", "note": f"Only {pool_size} specific pairings — add 5-10 more if possible"}
+        if pool_size < 20:
+            return {"status": "warning", "note": f"TIGHT — {pool_size} pairings. If senior FAs take 3-4, PBS can't build a legal line"}
+        return {"status": "ok", "note": f"{pool_size} specific pairings — healthy"}
+
+    targets = POOL_SIZE_TARGETS.get(layer_num)
+    if not targets:
+        return {"status": "ok", "note": f"{pool_size} pairings"}
+
+    target_min, target_max = targets
+    if pool_size < int(target_min * 0.75):
+        return {"status": "critical", "note": f"Only {pool_size} pairings (need {target_min}+) — PBS will struggle to build a legal line"}
+    if pool_size < target_min:
+        return {"status": "warning", "note": f"{pool_size} pairings (target: {target_min}+) — consider relaxing a property"}
+    return {"status": "ok", "note": f"{pool_size} pairings — healthy"}
+
+
+def _build_progressive_pools(
+    eligible: list[dict],
+    pinned_ids: set[str],
+) -> tuple[dict[int, list[dict]], dict[int, dict]]:
+    """Build per-layer candidate pools using progressive relaxation.
+
+    L1: Full pool (dream / lottery — CP-SAT picks the best schedule)
+    L2: Pinned entries (or auto-selected top 15-25)
+    L3: Generic properties derived from L2 picks
+    L4-L7: Progressively relaxed with superset validation (hard gate)
+
+    Returns (layer_pools, pool_metadata) where layer_pools maps
+    layer_num → list of candidate sequences, and pool_metadata maps
+    layer_num → {pool_type, notes, derived_properties, health, ...}.
+    """
+    seq_by_id = {s["_id"]: s for s in eligible}
+
+    # ── L2: Specific picks ──
+    if pinned_ids:
+        l2_picks = [seq_by_id[sid] for sid in pinned_ids if sid in seq_by_id]
+    else:
+        l2_picks = auto_select_l2_picks(eligible)
+
+    # ── L1: Dream schedule from full pool ──
+    l1_pool = list(eligible)
+
+    # ── Derive generic properties from L2 ──
+    derived = derive_generic_properties(l2_picks)
+    logger.info(
+        "Derived generic properties from %d L2 picks: trip_lengths=%s, "
+        "cities=%s, report=%s, equipment=%s",
+        len(l2_picks),
+        derived.get("trip_lengths"),
+        (derived.get("layover_cities") or [])[:5],
+        derived.get("report_range"),
+        derived.get("equipment"),
+    )
+
+    # ── L3: Apply derived properties ──
+    l3_props, l3_pool, l3_notes = relax_properties_for_layer(
+        derived, eligible, 3,
+    )
+    # L3 must include L2 picks (superset of L2)
+    l2_ids = {s["_id"] for s in l2_picks}
+    l3_pool, l3_added = ensure_superset(l3_pool, l2_ids, seq_by_id)
+    if l3_added:
+        l3_notes.append(f"Added {len(l3_added)} L2 pairings for superset guarantee")
+
+    layers: dict[int, list[dict]] = {1: l1_pool, 2: l2_picks, 3: l3_pool}
+    metadata: dict[int, dict] = {
+        1: {
+            "pool_type": "full",
+            "notes": [f"Full pool — {len(l1_pool)} pairings (dream schedule)"],
+            "health": pool_health_check(len(l1_pool), 1),
+        },
+        2: {
+            "pool_type": "specific",
+            "notes": [
+                f"{'Hand-picked' if pinned_ids else 'Auto-selected'}: "
+                f"{len(l2_picks)} pairings"
+            ],
+            "health": pool_health_check(len(l2_picks), 2),
+            "pick_count": len(l2_picks),
+        },
+        3: {
+            "pool_type": "generic",
+            "derived_properties": l3_props,
+            "notes": l3_notes,
+            "health": pool_health_check(len(l3_pool), 3),
+        },
+    }
+
+    # ── L4-L7: Progressive relaxation with superset hard gate ──
+    prev_pool_ids = {s["_id"] for s in l3_pool}
+
+    for layer_num in range(4, 8):
+        props_relaxed, pool, notes = relax_properties_for_layer(
+            derived, eligible, layer_num,
+        )
+
+        # Hard gate: ensure superset of previous layer
+        pool, added = ensure_superset(pool, prev_pool_ids, seq_by_id)
+        if added:
+            notes.append(
+                f"Added {len(added)} pairings from L{layer_num - 1} "
+                f"for superset guarantee"
+            )
+
+        layers[layer_num] = pool
+        metadata[layer_num] = {
+            "pool_type": "relaxed",
+            "relaxed_properties": props_relaxed,
+            "notes": notes,
+            "health": pool_health_check(len(pool), layer_num),
+        }
+        prev_pool_ids = {s["_id"] for s in pool}
+
+    return layers, metadata
+
+
 # ── Main Optimize Function ────────────────────────────────────────────────
 
 
@@ -589,165 +1158,256 @@ def optimize_bid(
     target_credit_max_minutes: int = 5400,
     seniority_percentage: float | None = None,
     commute_from: str | None = None,
-) -> list[dict]:
+    strategy_mode: str | None = None,
+) -> tuple[list[dict], dict | None]:
     """Run the full optimization pipeline and return layered entries.
 
-    When bid_properties is provided, uses PBS 7-layer property-based logic.
-    When None, falls back to existing 9-layer preference-based scoring.
-    target_credit_min/max_minutes: per-month range from the bid package.
-    seniority_percentage: 0-100 from PBS portal (used instead of number/total if set).
-    commute_from: IATA code if FA commutes (used for commute annotations, not schedule changes).
+    Strategy modes:
+    - "progressive" (DEFAULT): L1 dream → L2 specific → L3 generic(L2) →
+      L4-L7 progressively wider pools.  Superset validation is a hard gate.
+    - "themed": Each layer has a different theme (Dream, Max Pay, 4-Day,
+      Best Layovers, etc.).  Kept for FAs who prefer this approach.
+
+    Commuter detection is automatic: if commute_from is set, commuter
+    scoring weights are applied (report/release time weighted higher).
     """
     # Filter out excluded
     eligible = [s for s in sequences if s["_id"] not in excluded_ids]
 
-    # ── PBS property-based path (7 layers, CP-SAT optimised) ────────────
+    # Auto-detect commuter: commute_from set = commuter
+    is_commuter = bool(commute_from)
+
+    # Default strategy: themed when bid_properties provided (property-based
+    # filtering per layer), progressive relaxation otherwise (auto pools).
+    if strategy_mode is None:
+        strategy_mode = "themed" if bid_properties else "progressive"
+
+    # ── Common setup: trip quality, holdability, date spans ──────────────
+    from app.services.cpsat_builder import (
+        compute_trip_quality, solve_layer_cpsat,
+        PROGRESSIVE_LAYER_STRATEGIES, THEMED_LAYER_STRATEGIES,
+    )
+    from app.services.pdf_parser import enrich_sequence_totals
+
+    for seq in eligible:
+        # Ensure TPAY reflects CBA guarantee (fixes uniform 5h/day for DB data)
+        enrich_sequence_totals(seq)
+        # Ensure is_domestic flag exists (for DB data parsed before this field)
+        if "is_domestic" not in seq:
+            cat = (seq.get("category") or "").upper()
+            seq["is_domestic"] = "INTL" not in cat
+        seq["_trip_quality"] = compute_trip_quality(seq, is_commuter=is_commuter)
+        seq["attainability"] = estimate_attainability(
+            seq, seniority_number, total_base_fas, user_langs,
+            seniority_percentage=seniority_percentage,
+            all_sequences=eligible,
+        )
+        if "_all_spans" not in seq:
+            seq["_all_spans"] = _all_possible_date_spans(seq)
+
+    with_dates = [s for s in eligible if s.get("_all_spans")]
+
+    # ── Extract waiver properties (apply to ALL layers) ──────────────────
+    max_credit = target_credit_max_minutes
+    min_days_off = 11          # CBA §11.H default
+    block_limit_7day = 1800    # 30h (CBA §11.B default)
+    home_rest_min = 690        # 11h + 30min (CBA §11.I contractual)
+    double_up_dates: set[int] = set()
+
     if bid_properties:
-        num_layers = 7
+        for p in bid_properties:
+            pk = p.get("property_key")
+            pv = p.get("value")
+            if pk == "target_credit_range" and isinstance(pv, dict):
+                prop_max = pv.get("end", target_credit_max_minutes)
+                max_credit = min(prop_max, target_credit_max_minutes)
+            elif pk == "waive_minimum_days_off" and pv:
+                min_days_off = 8
+            elif pk == "waive_30hrs_in_7_days" and pv:
+                block_limit_7day = 2100
+            elif pk == "waive_minimum_domicile_rest" and pv:
+                home_rest_min = 630
+            elif pk == "allow_multiple_pairings" and pv:
+                double_up_dates = set(range(1, total_dates + 1))
+            elif pk == "allow_double_up_on_date" and pv:
+                day = _extract_day_from_property(pv, total_dates)
+                if day:
+                    double_up_dates.add(day)
+            elif pk == "allow_double_up_by_range" and isinstance(pv, dict):
+                s = _extract_day_from_property(pv.get("start"), total_dates)
+                e = _extract_day_from_property(pv.get("end"), total_dates)
+                if s and e:
+                    double_up_dates.update(range(s, e + 1))
 
-        # Pre-compute trip quality for composite scoring (once, before layer loop)
-        from app.services.cpsat_builder import compute_trip_quality, solve_layer_cpsat
-        for seq in eligible:
-            seq["_trip_quality"] = compute_trip_quality(seq)
+    # ── Build per-layer pools ────────────────────────────────────────────
+    if strategy_mode == "progressive":
+        pinned_ids = {
+            e["sequence_id"] for e in pinned_entries
+            if not e.get("is_excluded")
+        }
+        layer_pools, pool_metadata = _build_progressive_pools(
+            with_dates, pinned_ids,
+        )
+        strategy_set = PROGRESSIVE_LAYER_STRATEGIES
+    elif bid_properties:
+        # Themed mode with bid_properties
+        layer_pools, pool_metadata = _build_themed_pools(
+            with_dates, eligible, bid_properties,
+        )
+        strategy_set = THEMED_LAYER_STRATEGIES
+    else:
+        # Preference fallback (no properties, no progressive)
+        return _optimize_preference_fallback(
+            eligible, sequences, prefs, seniority_number, total_base_fas,
+            user_langs, excluded_ids, total_dates, target_credit_max_minutes,
+            seniority_percentage, commute_from,
+        )
 
-        # For each layer: filter, score, then build schedule with CP-SAT
-        layers: list[list[dict]] = []
-        used_in_prior: set[str] = set()
-        previous_solutions: list[set[str]] = []
+    # ── Score sequences per layer pool ───────────────────────────────────
+    num_layers = 7
+    layers: list[list[dict]] = []
+    layers_explanation_data: list[dict] = []
+    used_in_prior: set[str] = set()
+    previous_solutions: list[set[str]] = []
 
-        for layer_num in range(1, num_layers + 1):
-            # Filter sequences for this layer
-            filtered = filter_sequences_for_layer(eligible, bid_properties, layer_num)
+    for layer_num in range(1, num_layers + 1):
+        candidates_raw = layer_pools.get(layer_num, with_dates)
 
-            # Score using properties and compute date spans
-            for seq in filtered:
+        # Score sequences for this layer
+        for seq in candidates_raw:
+            if bid_properties:
                 seq["preference_score"] = score_sequence_from_properties(
                     seq, bid_properties, layer_num,
                 )
-                seq["attainability"] = estimate_attainability(
-                    seq, seniority_number, total_base_fas, user_langs,
-                    seniority_percentage=seniority_percentage,
-                )
-                # Pre-compute date spans (required by solver)
-                if "_all_spans" not in seq:
-                    seq["_all_spans"] = _all_possible_date_spans(seq)
+            elif "preference_score" not in seq:
+                seq["preference_score"] = score_sequence(seq, prefs)
 
-            # Filter to sequences with date info
-            filtered = [s for s in filtered if s.get("_all_spans")]
+        # Filter to sequences with date info
+        candidates_raw = [s for s in candidates_raw if s.get("_all_spans")]
 
-            # Penalize reuse from prior layers
-            candidates = []
-            for seq in filtered:
-                if seq["_id"] in used_in_prior:
-                    adj = dict(seq)
-                    adj["_all_spans"] = seq["_all_spans"]
-                    adj["preference_score"] = seq["preference_score"] * 0.6
-                    candidates.append(adj)
-                else:
-                    candidates.append(seq)
+        # Penalize reuse from prior layers (encourages diversity)
+        candidates = []
+        for seq in candidates_raw:
+            if seq["_id"] in used_in_prior:
+                adj = dict(seq)
+                adj["_all_spans"] = seq["_all_spans"]
+                adj["preference_score"] = seq.get("preference_score", 0.5) * 0.6
+                candidates.append(adj)
+            else:
+                candidates.append(seq)
 
-            # Use bid-period target credit range, allow property overrides
-            max_credit = target_credit_max_minutes
-            min_days_off = 11  # CBA §11.H default
-            for p in bid_properties:
-                if p.get("property_key") == "target_credit_range" and isinstance(p.get("value"), dict):
-                    # Property can tighten the range but not exceed bid period max
-                    prop_max = p["value"].get("end", target_credit_max_minutes)
-                    max_credit = min(prop_max, target_credit_max_minutes)
-                if p.get("property_key") == "waive_minimum_days_off" and p.get("value"):
-                    min_days_off = 8  # reduced if waived
+        # CP-SAT solver
+        strat = strategy_set.get(layer_num, {})
+        layer = solve_layer_cpsat(
+            candidates, total_dates,
+            max_credit_minutes=max_credit,
+            min_credit_minutes=target_credit_min_minutes,
+            min_days_off=min_days_off,
+            layer_num=layer_num,
+            previous_solutions=previous_solutions,
+            strategy=strat,
+            block_limit_7day_minutes=block_limit_7day,
+            home_rest_minutes=home_rest_min,
+            double_up_dates=double_up_dates or None,
+        )
+        layers.append(layer)
 
-            # CP-SAT solver (falls back to greedy if ortools unavailable)
-            layer = solve_layer_cpsat(
-                candidates, total_dates,
-                max_credit_minutes=max_credit,
-                min_credit_minutes=target_credit_min_minutes,
-                min_days_off=min_days_off,
-                layer_num=layer_num, previous_solutions=previous_solutions,
-            )
-            layers.append(layer)
+        # Collect explanation metadata
+        total_credit_min = sum(
+            s.get("totals", {}).get("tpay_minutes", 0) for s in layer
+        )
+        working_dates: set[int] = set()
+        for s in layer:
+            working_dates |= set(s.get("_chosen_span", set()))
+        holdabilities = [s.get("_holdability", 0.5) for s in layer]
+        avg_hold = (
+            sum(holdabilities) / len(holdabilities) if holdabilities else 0.5
+        )
+        span_days = (
+            (max(working_dates) - min(working_dates) + 1)
+            if working_dates else 0
+        )
 
-            # Track selections for reuse penalty + Hamming distance
-            layer_ids: set[str] = set()
-            for seq in layer:
-                used_in_prior.add(seq["_id"])
-                layer_ids.add(seq["_id"])
-            previous_solutions.append(layer_ids)
+        meta = pool_metadata.get(layer_num, {})
+        layers_explanation_data.append({
+            "layer_num": layer_num,
+            "strategy_name": strat.get("name", f"Layer {layer_num}"),
+            "strategy_mode": strategy_mode,
+            "sequences": layer,
+            "pool_sequences": candidates,
+            "pool_size": len(candidates),
+            "selected": layer,
+            "total_credit_minutes": total_credit_min,
+            "days_off": total_dates - len(working_dates),
+            "span_days": span_days,
+            "avg_holdability": round(avg_hold * 100, 0),
+            "credit_hours": round(total_credit_min / 60, 1),
+            "max_credit_minutes": max_credit,
+            "min_days_off": min_days_off,
+            "total_dates": total_dates,
+            "has_double_up": bool(double_up_dates),
+            "has_waiver": block_limit_7day > 1800 or home_rest_min < 690,
+            # Progressive relaxation metadata
+            "pool_metadata": meta,
+            "pool_health": meta.get("health", {}),
+            "pool_notes": meta.get("notes", []),
+            "derived_properties": meta.get("derived_properties"),
+            "relaxed_properties": meta.get("relaxed_properties"),
+        })
 
-        # Log
-        for i, layer in enumerate(layers, 1):
-            logger.info("PBS Layer %d: %d sequences", i, len(layer))
+        # Track selections
+        layer_ids: set[str] = set()
+        for seq in layer:
+            used_in_prior.add(seq["_id"])
+            layer_ids.add(seq["_id"])
+        previous_solutions.append(layer_ids)
 
-        # Flatten — rank within each layer by effective score (best first)
-        entries: list[dict] = []
-        rank = 1
-        for layer_idx, layer_seqs in enumerate(layers, start=1):
-            # Sort by effective score descending so best sequences get lowest rank
-            ranked_seqs = sorted(layer_seqs, key=_effective_score, reverse=True)
-            for seq in ranked_seqs:
-                chosen = seq.get("_chosen_span")
-                entries.append({
-                    "rank": rank,
-                    "sequence_id": seq["_id"],
-                    "seq_number": seq.get("seq_number", 0),
-                    "is_pinned": False,
-                    "is_excluded": False,
-                    "rationale": generate_rationale(
-                        seq, seq["preference_score"], seq.get("attainability", "unknown"), prefs,
-                    ),
-                    "preference_score": seq["preference_score"],
-                    "attainability": seq.get("attainability", "unknown"),
-                    "date_conflict_group": f"layer-{layer_idx}",
-                    "operating_dates": sorted(chosen) if chosen else seq.get("operating_dates", []),
-                    "chosen_dates": sorted(chosen) if chosen else [],
-                    "layer": layer_idx,
-                })
-                rank += 1
+    # Log
+    for i, layer in enumerate(layers, 1):
+        pool_sz = len(layer_pools.get(i, []))
+        logger.info(
+            "%s L%d: %d selected from %d pool",
+            strategy_mode.title(), i, len(layer), pool_sz,
+        )
 
-    # ── No-properties fallback (7 layers, preference-scored) ────────────
-    else:
-        num_layers = 7
-        cluster_trips = prefs.get("cluster_trips", False)
+    # ── Flatten to ranked entries ────────────────────────────────────────
+    entries: list[dict] = []
+    rank = 1
+    for layer_idx, layer_seqs in enumerate(layers, start=1):
+        ranked_seqs = sorted(layer_seqs, key=_effective_score, reverse=True)
+        for seq in ranked_seqs:
+            chosen = seq.get("_chosen_span")
+            att_val = seq.get("_holdability", 0.5)
+            if att_val >= 0.70:
+                hold_cat = "LIKELY"
+            elif att_val >= 0.40:
+                hold_cat = "COMPETITIVE"
+            else:
+                hold_cat = "LONG SHOT"
 
-        # Score and estimate attainability
-        for seq in eligible:
-            seq["preference_score"] = score_sequence(seq, prefs)
-            seq["attainability"] = estimate_attainability(
-                seq, seniority_number, total_base_fas, user_langs,
-                seniority_percentage=seniority_percentage,
-            )
-
-        layers_default = build_layers(eligible, total_dates, cluster_trips,
-                                      num_layers=num_layers,
-                                      max_credit_minutes=target_credit_max_minutes)
-
-        for i, layer in enumerate(layers_default, 1):
-            logger.info("Layer %d: %d sequences", i, len(layer))
-
-        entries = []
-        rank = 1
-        for layer_idx, layer_seqs in enumerate(layers_default, start=1):
-            # Sort by effective score descending so best sequences get lowest rank
-            ranked_seqs = sorted(layer_seqs, key=_effective_score, reverse=True)
-            for seq in ranked_seqs:
-                chosen = seq.get("_chosen_span")
-                entries.append({
-                    "rank": rank,
-                    "sequence_id": seq["_id"],
-                    "seq_number": seq.get("seq_number", 0),
-                    "is_pinned": False,
-                    "is_excluded": False,
-                    "rationale": generate_rationale(
-                        seq, seq["preference_score"], seq["attainability"], prefs,
-                    ),
-                    "preference_score": seq["preference_score"],
-                    "attainability": seq["attainability"],
-                    "date_conflict_group": f"layer-{layer_idx}",
-                    "operating_dates": sorted(chosen) if chosen else seq.get("operating_dates", []),
-                    "chosen_dates": sorted(chosen) if chosen else [],
-                    "layer": layer_idx,
-                })
-                rank += 1
+            entries.append({
+                "rank": rank,
+                "sequence_id": seq["_id"],
+                "seq_number": seq.get("seq_number", 0),
+                "is_pinned": False,
+                "is_excluded": False,
+                "rationale": generate_rationale(
+                    seq, seq.get("preference_score", 0.5),
+                    seq.get("attainability", "unknown"), prefs,
+                ),
+                "preference_score": seq.get("preference_score", 0.5),
+                "attainability": seq.get("attainability", "unknown"),
+                "holdability_pct": round(att_val * 100, 0),
+                "holdability_category": hold_cat,
+                "date_conflict_group": f"layer-{layer_idx}",
+                "operating_dates": (
+                    sorted(chosen) if chosen
+                    else seq.get("operating_dates", [])
+                ),
+                "chosen_dates": sorted(chosen) if chosen else [],
+                "layer": layer_idx,
+            })
+            rank += 1
 
     # Append excluded entries
     for seq in sequences:
@@ -767,11 +1427,143 @@ def optimize_bid(
             })
             rank += 1
 
-    # Annotate commute info if FA is a commuter
+    # Annotate commute info
     if commute_from:
         annotate_commute(entries, sequences, commute_from)
 
-    return entries
+    # Build explanation data
+    explanation_data = None
+    if layers_explanation_data:
+        try:
+            from app.services.explainer import generate_full_explanation
+            explanation_data = generate_full_explanation(
+                layers_explanation_data,
+                seniority_number=seniority_number,
+                total_fas=total_base_fas,
+                seniority_percentage=seniority_percentage,
+                total_dates=total_dates,
+            )
+        except Exception:
+            logger.exception("Failed to generate explanation data")
+            explanation_data = None
+
+    return entries, explanation_data
+
+
+def _build_themed_pools(
+    with_dates: list[dict],
+    eligible: list[dict],
+    bid_properties: list[dict],
+) -> tuple[dict[int, list[dict]], dict[int, dict]]:
+    """Build per-layer pools using themed strategy (legacy).
+
+    Each layer filters sequences using the user's bid_properties assigned
+    to that layer.
+    """
+    layer_pools: dict[int, list[dict]] = {}
+    metadata: dict[int, dict] = {}
+
+    for layer_num in range(1, 8):
+        filtered = filter_sequences_for_layer(eligible, bid_properties, layer_num)
+        filtered = [s for s in filtered if s.get("_all_spans")]
+        layer_pools[layer_num] = filtered
+        metadata[layer_num] = {
+            "pool_type": "themed",
+            "notes": [f"Property filter: {len(filtered)} pairings"],
+            "health": pool_health_check(len(filtered), layer_num),
+        }
+
+    return layer_pools, metadata
+
+
+def _optimize_preference_fallback(
+    eligible: list[dict],
+    all_sequences: list[dict],
+    prefs: dict,
+    seniority_number: int,
+    total_base_fas: int,
+    user_langs: list[str],
+    excluded_ids: set[str],
+    total_dates: int,
+    target_credit_max_minutes: int,
+    seniority_percentage: float | None,
+    commute_from: str | None,
+) -> tuple[list[dict], None]:
+    """Preference-based fallback (no properties, no progressive).
+
+    Uses the greedy build_layers approach.
+    """
+    num_layers = 7
+    cluster_trips = prefs.get("cluster_trips", False)
+
+    for seq in eligible:
+        if "preference_score" not in seq:
+            seq["preference_score"] = score_sequence(seq, prefs)
+        if "attainability" not in seq:
+            seq["attainability"] = estimate_attainability(
+                seq, seniority_number, total_base_fas, user_langs,
+                seniority_percentage=seniority_percentage,
+                all_sequences=eligible,
+            )
+
+    layers_default = build_layers(
+        eligible, total_dates, cluster_trips,
+        num_layers=num_layers,
+        max_credit_minutes=target_credit_max_minutes,
+    )
+
+    for i, layer in enumerate(layers_default, 1):
+        logger.info("Fallback Layer %d: %d sequences", i, len(layer))
+
+    entries: list[dict] = []
+    rank = 1
+    for layer_idx, layer_seqs in enumerate(layers_default, start=1):
+        ranked_seqs = sorted(layer_seqs, key=_effective_score, reverse=True)
+        for seq in ranked_seqs:
+            chosen = seq.get("_chosen_span")
+            entries.append({
+                "rank": rank,
+                "sequence_id": seq["_id"],
+                "seq_number": seq.get("seq_number", 0),
+                "is_pinned": False,
+                "is_excluded": False,
+                "rationale": generate_rationale(
+                    seq, seq["preference_score"], seq["attainability"], prefs,
+                ),
+                "preference_score": seq["preference_score"],
+                "attainability": seq["attainability"],
+                "date_conflict_group": f"layer-{layer_idx}",
+                "operating_dates": (
+                    sorted(chosen) if chosen
+                    else seq.get("operating_dates", [])
+                ),
+                "chosen_dates": sorted(chosen) if chosen else [],
+                "layer": layer_idx,
+            })
+            rank += 1
+
+    # Append excluded
+    for seq in all_sequences:
+        if seq["_id"] in excluded_ids:
+            entries.append({
+                "rank": rank,
+                "sequence_id": seq["_id"],
+                "seq_number": seq.get("seq_number", 0),
+                "is_pinned": False,
+                "is_excluded": True,
+                "rationale": "Excluded by user",
+                "preference_score": 0.0,
+                "attainability": "unknown",
+                "date_conflict_group": None,
+                "operating_dates": seq.get("operating_dates", []),
+                "layer": 0,
+            })
+            rank += 1
+
+    if commute_from:
+        annotate_commute(entries, all_sequences, commute_from)
+
+    return entries, None
 
 
 # Keep old function names for backward compatibility with tests

@@ -471,8 +471,114 @@ async def get_projected_schedules(
     return {"layers": layers}
 
 
+@router.get("/{bid_id}/explanation")
+async def get_explanation(
+    bid_period_id: str,
+    bid_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Get the full explanation output for the most recent optimization.
+
+    Returns holdability report, per-layer narratives, calendar grids,
+    per-pairing rationales, PBS property translations, cross-layer summary,
+    personalized recommendations, and contextual tips.
+    """
+    _verify_bid_period(bid_period_id, user_id)
+    bid_doc = _verify_bid(bid_period_id, bid_id, user_id)
+
+    explanation = bid_doc.get("explanation")
+    if not explanation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No explanation data available. Run optimize first.",
+        )
+
+    return explanation
+
+
+@router.get("/{bid_id}/holdability")
+async def get_holdability_report(
+    bid_period_id: str,
+    bid_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Get the seniority-aware holdability report for this bid.
+
+    Shows per-layer holdability assessments, overall seniority verdict,
+    best realistic layers, and personalized recommendations.
+    """
+    _verify_bid_period(bid_period_id, user_id)
+    bid_doc = _verify_bid(bid_period_id, bid_id, user_id)
+
+    explanation = bid_doc.get("explanation")
+    if not explanation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No holdability data available. Run optimize first.",
+        )
+
+    return explanation.get("holdability_report", {})
+
+
+@router.get("/{bid_id}/explain-exclusion")
+async def explain_sequence_exclusion(
+    bid_period_id: str,
+    bid_id: str,
+    seq_number: int,
+    layer: int = 1,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Explain why a specific sequence was NOT selected in a given layer.
+
+    Query params:
+      seq_number: The sequence number to explain
+      layer: Which layer to check (1-7, default 1)
+    """
+    _verify_bid_period(bid_period_id, user_id)
+    bid_doc = _verify_bid(bid_period_id, bid_id, user_id)
+
+    # Find the sequence
+    seq_coll = get_collection("sequences")
+    seq_doc = seq_coll.find_one({
+        "bid_period_id": bid_period_id,
+        "seq_number": seq_number,
+    })
+    if not seq_doc:
+        raise HTTPException(status_code=404, detail=f"Sequence {seq_number} not found")
+
+    explanation = bid_doc.get("explanation", {})
+    layer_data = None
+    for ld in explanation.get("layers", []):
+        if ld.get("layer_num") == layer:
+            layer_data = ld
+            break
+
+    if not layer_data:
+        return {"explanation": f"Layer {layer} data not available. Run optimize first."}
+
+    # Check if the sequence IS in this layer
+    for rat in layer_data.get("rationales", []):
+        if rat.get("seq_number") == seq_number:
+            return {
+                "explanation": f"SEQ-{seq_number} IS selected in Layer {layer}.",
+                "rationale": rat,
+            }
+
+    return {
+        "explanation": (
+            f"SEQ-{seq_number} was not selected in Layer {layer}. "
+            "It may have been filtered out by layer properties, "
+            "conflicted with a higher-scoring trip, or would have "
+            "exceeded credit/days-off limits."
+        ),
+        "seq_number": seq_number,
+        "layer": layer,
+    }
+
+
 class OptimizeRequest(PydanticBaseModel):
     preferences: Optional[Preferences] = None
+    strategy_mode: Optional[str] = None  # "progressive" (default) or "themed"
 
 
 @router.post("/{bid_id}/optimize", response_model=Bid)
@@ -553,7 +659,10 @@ async def optimize(
     target_credit_min = bp_doc.get("target_credit_min_minutes", 4200)
     target_credit_max = bp_doc.get("target_credit_max_minutes", 5400)
 
-    optimized_entries = optimize_bid(
+    # Strategy mode: progressive (default) or themed
+    strategy_mode = body.strategy_mode if body else None
+
+    result = optimize_bid(
         sequences=all_seqs,
         prefs=merged_prefs,
         seniority_number=seniority_number,
@@ -567,7 +676,14 @@ async def optimize(
         target_credit_max_minutes=target_credit_max,
         seniority_percentage=seniority_percentage,
         commute_from=commute_from,
+        strategy_mode=strategy_mode,
     )
+
+    # optimize_bid returns (entries, explanation_data) tuple
+    if isinstance(result, tuple):
+        optimized_entries, explanation_data = result
+    else:
+        optimized_entries, explanation_data = result, None
 
     # Trim to top N active entries + any excluded entries
     active = [e for e in optimized_entries if not e.get("is_excluded")]
@@ -618,6 +734,10 @@ async def optimize(
         "optimization_run_at": now,
         "updated_at": now,
     }
+
+    # Store explanation data (holdability report + layer explanations)
+    if explanation_data:
+        updates["explanation"] = explanation_data
 
     bids_coll = get_collection("bids")
     bids_coll.update_one({"_id": bid_id}, {"$set": updates})

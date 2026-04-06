@@ -401,6 +401,71 @@ def _parse_page_text(
     return sequences, category, footer_info
 
 
+def _colon_time_to_minutes(t: str) -> int:
+    """Convert 'HH:MM' format to minutes since midnight."""
+    parts = t.split(":")
+    return int(parts[0]) * 60 + int(parts[1])
+
+
+def enrich_sequence_totals(seq: dict) -> None:
+    """Compute CBA rig values and ensure TPAY reflects the CBA guarantee.
+
+    Fixes the uniform-TPAY problem: when the PDF's TPAY equals the flat
+    5h/duty-day guarantee, we recompute from actual block, duty rig, and
+    trip rig so the optimizer can differentiate trips of the same length.
+
+    Safe to call multiple times (idempotent).
+    """
+    dps = seq.get("duty_periods", [])
+    totals = seq.get("totals", {})
+    if not totals:
+        return
+
+    block = totals.get("block_minutes", 0)
+    tafb = totals.get("tafb_minutes", 0)
+    duty_days = totals.get("duty_days", len(dps)) or len(dps) or 1
+
+    # ── Compute total on-duty minutes from per-DP data ──
+    on_duty_total = 0
+    for dp in dps:
+        dm = dp.get("duty_minutes", 0)
+        if dm:
+            on_duty_total += dm
+        else:
+            # Fallback: compute from report/release times
+            rpt_str = dp.get("report_base", "")
+            rls_str = dp.get("release_base", "")
+            if rpt_str and rls_str and ":" in rpt_str and ":" in rls_str:
+                rpt = _colon_time_to_minutes(rpt_str)
+                rls = _colon_time_to_minutes(rls_str)
+                if rls > rpt:
+                    on_duty_total += rls - rpt
+                elif rls < rpt:  # crosses midnight
+                    on_duty_total += (24 * 60 - rpt) + rls
+
+    # ── CBA rig calculations ──
+    # §2.P: duty rig = 1 hour per 2 hours on-duty
+    duty_rig = on_duty_total // 2 if on_duty_total else 0
+    # §2.AAA: trip rig = 1 hour per 3.5 hours TAFB
+    trip_rig = int(tafb / 3.5) if tafb else 0
+    # §11.D: minimum guarantee = 5 hours per duty period
+    dp_guarantee = 5 * 60 * duty_days
+
+    computed_tpay = max(block, duty_rig, trip_rig, dp_guarantee)
+
+    totals["duty_rig_minutes"] = duty_rig
+    totals["trip_rig_minutes"] = trip_rig
+
+    # Only adjust TPAY when it appears to be the flat 5h/day guarantee
+    # (or missing entirely).  This targets the uniform-TPAY problem without
+    # overriding intentionally varied TPAY values from the bid sheet.
+    parsed_tpay = totals.get("tpay_minutes", 0)
+    if parsed_tpay == 0 or parsed_tpay == dp_guarantee:
+        totals["tpay_minutes"] = max(parsed_tpay, computed_tpay)
+
+    seq["totals"] = totals
+
+
 def _derive_sequence_fields(seq: dict, config: AirlineConfig = DEFAULT_CONFIG) -> None:
     """Compute derived fields (is_turn, has_deadhead, is_redeye, etc.) in place."""
     dps = seq.get("duty_periods", [])
@@ -472,6 +537,12 @@ def _derive_sequence_fields(seq: dict, config: AirlineConfig = DEFAULT_CONFIG) -
 
     # Speaker sequence detection
     seq["is_speaker_sequence"] = seq.get("language") is not None
+
+    # Domestic flag
+    seq["is_domestic"] = not is_international
+
+    # Compute rig values and ensure TPAY reflects CBA guarantee
+    enrich_sequence_totals(seq)
 
 
 # ── Main entry point ────────────────────────────────────────────────────────

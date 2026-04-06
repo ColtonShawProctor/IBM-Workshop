@@ -96,6 +96,7 @@ def _make_seq(
             "deadhead_count": 1 if has_deadhead else 0,
         },
         "duty_periods": dps,
+        "is_domestic": "INTL" not in (category or "").upper(),
     }
 
 
@@ -142,7 +143,7 @@ class TestWithinLayerRanking:
             _make_seq(3, [10, 11, 12], tpay_minutes=700, duty_days=3),
         ]
         props = [_prop("maximize_credit", True, category="line")]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=30, bid_properties=props,
@@ -168,7 +169,7 @@ class TestWithinLayerRanking:
             _prop("prefer_pairing_type", "ipd", layers=[1]),
             _prop("maximize_credit", True, category="line"),
         ]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=30, bid_properties=props,
@@ -195,7 +196,7 @@ class TestWithinLayerRanking:
         seqs[1]["ops_count"] = 1   # low ops → less attainable
 
         props = [_prop("maximize_credit", True, category="line")]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=1500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=30, bid_properties=props,
@@ -220,7 +221,7 @@ class TestCrossLayerDifferentiation:
             for i in range(8)
         ]
         props = [_prop("maximize_credit", True, category="line")]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=30, bid_properties=props,
@@ -244,7 +245,7 @@ class TestCrossLayerDifferentiation:
             _make_seq(4, [15, 16, 17], tpay_minutes=300, duty_days=3),  # worst
         ]
         props = [_prop("maximize_credit", True, category="line")]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=30, bid_properties=props,
@@ -284,7 +285,7 @@ class TestCrossLayerDifferentiation:
             # All layers: maximize credit
             _prop("maximize_credit", True, layers=[1, 2, 3, 4, 5, 6, 7], category="line"),
         ]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=30, bid_properties=props,
@@ -319,7 +320,7 @@ class TestCrossLayerDifferentiation:
             _make_seq(6, [10, 11, 12], tpay_minutes=650, duty_days=3),  # conflicts with 5
         ]
         props = [_prop("maximize_credit", True, category="line")]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=30, bid_properties=props,
@@ -555,7 +556,7 @@ class TestRealisticScenarios:
             _prop("maximize_credit", True,
                   layers=[1, 2, 3, 4, 5, 6, 7], category="line"),
         ]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=31, bid_properties=props,
@@ -579,7 +580,7 @@ class TestRealisticScenarios:
             _prop("maximize_credit", True,
                   layers=[1, 2, 3, 4, 5, 6, 7], category="line"),
         ]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=["JP"], pinned_entries=[],
             excluded_ids=set(), total_dates=31, bid_properties=props,
@@ -600,7 +601,7 @@ class TestRealisticScenarios:
             for i in range(12)
         ]
         props = [_prop("maximize_credit", True, category="line")]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=30, bid_properties=props,
@@ -627,7 +628,7 @@ class TestRealisticScenarios:
             for i in range(14)  # 14 seqs × 2 days = 28 days max
         ]
         props = [_prop("maximize_credit", True, category="line")]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=30, bid_properties=props,
@@ -650,7 +651,7 @@ class TestRealisticScenarios:
         """No two sequences in the same layer should have overlapping dates."""
         seqs = self._build_diverse_pool()
         props = [_prop("maximize_credit", True, category="line")]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=31, bid_properties=props,
@@ -834,7 +835,7 @@ class TestEdgeCases:
             _prop("prefer_aircraft", "777", layers=[1]),
             _prop("maximize_credit", True, layers=[1, 2, 3, 4, 5, 6, 7], category="line"),
         ]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=30, bid_properties=props,
@@ -851,7 +852,7 @@ class TestEdgeCases:
         """With only 1 sequence, it should appear in L1."""
         seqs = [_make_seq(1, [1, 2, 3], tpay_minutes=600, duty_days=3)]
         props = [_prop("maximize_credit", True, category="line")]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=30, bid_properties=props,
@@ -866,7 +867,7 @@ class TestEdgeCases:
             for i in range(5)
         ]
         props = [_prop("maximize_credit", True, category="line")]
-        entries = optimize_bid(
+        entries, _ = optimize_bid(
             sequences=seqs, prefs={}, seniority_number=500,
             total_base_fas=3000, user_langs=[], pinned_entries=[],
             excluded_ids=set(), total_dates=30, bid_properties=props,

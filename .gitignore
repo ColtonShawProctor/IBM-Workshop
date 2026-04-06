@@ -30,3 +30,6 @@ frontend/dist/
 # Cached optimizer output
 fresh_entries.json
 fresh_entries_v3.json
+
+# pip artifacts
+=*
