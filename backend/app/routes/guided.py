@@ -655,11 +655,48 @@ async def build_guided_bid(
             "holdability_pct": holdability,
         })
 
+    # Enrich entries with sequence detail (duty periods, legs, cities, totals)
+    seq_by_id = {s["_id"]: s for s in all_seqs}
+    enriched_entries = []
+    for entry in final_entries:
+        seq = seq_by_id.get(entry.get("sequence_id"))
+        enriched = dict(entry)
+        if seq:
+            enriched["totals"] = seq.get("totals", {})
+            enriched["layover_cities"] = seq.get("layover_cities", [])
+            enriched["category"] = seq.get("category", "")
+            enriched["duty_periods"] = []
+            for dp in seq.get("duty_periods", []):
+                dp_out = {
+                    "report_base": dp.get("report_base", ""),
+                    "release_base": dp.get("release_base", ""),
+                    "duty_minutes": dp.get("duty_minutes", 0),
+                    "day_of_seq": dp.get("day_of_seq", 0),
+                    "legs": [],
+                }
+                if dp.get("layover"):
+                    lo = dp["layover"]
+                    dp_out["layover"] = {
+                        "city": lo.get("city", ""),
+                        "rest_minutes": lo.get("rest_minutes", 0),
+                    }
+                for leg in dp.get("legs", []):
+                    dp_out["legs"].append({
+                        "origin": leg.get("departure_station", ""),
+                        "destination": leg.get("arrival_station", ""),
+                        "equipment": leg.get("equipment", ""),
+                        "block_minutes": leg.get("block_minutes", 0),
+                        "flight_number": leg.get("flight_number", ""),
+                        "is_deadhead": leg.get("is_deadhead", False),
+                    })
+                enriched["duty_periods"].append(dp_out)
+        enriched_entries.append(enriched)
+
     return {
         "bid_id": bid_id,
         "status": "optimized",
-        "total_entries": len(final_entries),
+        "total_entries": len(enriched_entries),
         "layer_summary": layer_summary,
         "explanation": explanation_data,
-        "entries": final_entries[:50],  # first 50 for display
+        "entries": enriched_entries,
     }

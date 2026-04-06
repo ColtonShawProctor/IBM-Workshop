@@ -369,6 +369,48 @@ export interface ConflictPair {
   overlap_dates: number[];
 }
 
+export interface BuildEntryLeg {
+  origin: string;
+  destination: string;
+  equipment: string;
+  block_minutes: number;
+  flight_number: string;
+  is_deadhead: boolean;
+}
+
+export interface BuildEntryDP {
+  report_base: string;
+  release_base: string;
+  duty_minutes: number;
+  day_of_seq: number;
+  legs: BuildEntryLeg[];
+  layover?: { city: string; rest_minutes: number };
+}
+
+export interface BuildEntry {
+  rank: number;
+  sequence_id: string;
+  seq_number: number;
+  layer: number;
+  holdability_pct: number;
+  holdability_category: string;
+  rationale: string;
+  chosen_dates: number[];
+  operating_dates: number[];
+  preference_score: number;
+  attainability: string;
+  totals?: {
+    tpay_minutes?: number;
+    block_minutes?: number;
+    tafb_minutes?: number;
+    duty_days?: number;
+    leg_count?: number;
+  };
+  layover_cities?: string[];
+  category?: string;
+  duty_periods?: BuildEntryDP[];
+}
+
 export interface GuidedBuildResult {
   bid_id: string;
   status: string;
@@ -381,7 +423,7 @@ export interface GuidedBuildResult {
     holdability_pct: number;
   }[];
   explanation: Record<string, unknown> | null;
-  entries: Record<string, unknown>[];
+  entries: BuildEntry[];
 }
 
 export async function guidedPoolCount(bidPeriodId: string, criteria: GuidedCriteria): Promise<PoolCountResult> {

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import type { GuidedCriteria, GuidedBuildResult } from '../lib/api';
+import type { GuidedCriteria, GuidedBuildResult, BuildEntry, BuildEntryDP } from '../lib/api';
 
 interface BuildBidStepProps {
   bidPeriodId: string;
@@ -323,6 +323,211 @@ function PrintView({
   );
 }
 
+// --- Helper: format minutes to HH:MM ---
+
+function fmtTime(hhmm: string | undefined): string {
+  if (!hhmm) return '—';
+  return hhmm;
+}
+
+function fmtMin(minutes: number): string {
+  if (!minutes) return '0:00';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${h}:${String(m).padStart(2, '0')}`;
+}
+
+// --- Trip Card Component ---
+
+function TripCard({ entry }: { entry: BuildEntry }) {
+  const [expanded, setExpanded] = useState(false);
+  const t = entry.totals || {};
+  const dps = entry.duty_periods || [];
+  const cities = entry.layover_cities || [];
+  const dd = t.duty_days || dps.length || 1;
+  const tpay = t.tpay_minutes || 0;
+  const block = t.block_minutes || 0;
+  const tafb = t.tafb_minutes || 0;
+  const cpd = dd > 0 ? tpay / dd : 0;
+  const rpt = dps[0]?.report_base || '';
+  const rls = dps[dps.length - 1]?.release_base || '';
+  const chosenStart = entry.chosen_dates?.[0] || entry.operating_dates?.[0] || 0;
+  const chosenEnd = chosenStart + dd - 1;
+
+  return (
+    <div className="border border-gray-100 rounded-lg bg-white">
+      {/* Collapsed row */}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-gray-50 transition-colors"
+      >
+        <span className="text-xs text-gray-400 w-4 flex-shrink-0">{expanded ? '▾' : '▸'}</span>
+        <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap text-sm">
+          <span className="font-semibold text-gray-900">
+            {cities.length > 0 ? cities.join('+') : 'Turn'} {dd}-Day
+          </span>
+          <span className="text-gray-600 font-medium">{fmtMin(tpay)}</span>
+          <span className="text-xs text-gray-400">SEQ {entry.seq_number}</span>
+          <span className="text-xs text-gray-500 ml-auto whitespace-nowrap">
+            RPT {fmtTime(rpt)} &middot; RLS {fmtTime(rls)} &middot; Day {chosenStart}–{chosenEnd}
+          </span>
+        </div>
+        <span className={`text-xs font-medium rounded-full px-2 py-0.5 flex-shrink-0 ${holdabilityBg(entry.holdability_pct)}`}>
+          {entry.holdability_pct}%
+        </span>
+      </button>
+
+      {/* Expanded duty-by-duty detail */}
+      {expanded && (
+        <div className="px-4 pb-4 pt-1 border-t border-gray-100">
+          <div className="space-y-3">
+            {dps.map((dp, i) => {
+              const dpBlock = dp.legs.reduce((s, l) => s + (l.block_minutes || 0), 0);
+              const legCount = dp.legs.length;
+              const eqSet = [...new Set(dp.legs.map(l => l.equipment).filter(Boolean))];
+              const dest = dp.legs[dp.legs.length - 1]?.destination || '';
+              const origin = dp.legs[0]?.origin || '';
+              const dayNum = chosenStart + i;
+
+              return (
+                <div key={i} className="text-sm">
+                  <div className="flex items-center gap-2 font-medium text-gray-800">
+                    <span className="text-xs bg-blue-100 text-blue-700 rounded px-1.5 py-0.5">
+                      Day {dayNum}
+                    </span>
+                    <span>{origin} → {dest}</span>
+                  </div>
+                  <div className="ml-6 mt-1 text-xs text-gray-500 space-y-0.5">
+                    <p>
+                      Report {fmtTime(dp.report_base)} &middot;{' '}
+                      {legCount} leg{legCount !== 1 ? 's' : ''}
+                      {legCount > 1 && ` (${dp.legs.map(l => `${l.origin}→${l.destination}`).join(', ')})`}
+                      {eqSet.length > 0 && ` · ${eqSet.join(', ')}`}
+                    </p>
+                    <p>
+                      Block: {fmtMin(dpBlock)} &middot; Duty: {fmtMin(dp.duty_minutes)}
+                      {dp.release_base && ` · Release ${fmtTime(dp.release_base)}`}
+                    </p>
+                    {dp.layover && (
+                      <p className="text-gray-600">
+                        Layover: <span className="font-medium">{dp.layover.city}</span> — {fmtMin(dp.layover.rest_minutes)}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-3 pt-2 border-t border-gray-100 text-xs text-gray-500 flex gap-4">
+            <span>TAFB: {fmtMin(tafb)}</span>
+            <span>Block: {fmtMin(block)}</span>
+            <span>CPD: {fmtMin(Math.round(cpd))}/day</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Layer Detail View with expandable trips ---
+
+function LayerDetailView({ buildResult }: { buildResult: GuidedBuildResult }) {
+  const [expandedLayers, setExpandedLayers] = useState<Set<number>>(new Set([1, 2]));
+
+  const toggleLayer = (n: number) => {
+    setExpandedLayers(prev => {
+      const next = new Set(prev);
+      if (next.has(n)) next.delete(n); else next.add(n);
+      return next;
+    });
+  };
+
+  const entriesByLayer = useMemo(() => {
+    const map = new Map<number, BuildEntry[]>();
+    for (const e of buildResult.entries) {
+      const layer = e.layer || 0;
+      if (!map.has(layer)) map.set(layer, []);
+      map.get(layer)!.push(e);
+    }
+    return map;
+  }, [buildResult.entries]);
+
+  return (
+    <div className="space-y-3">
+      {buildResult.layer_summary
+        .slice()
+        .sort((a, b) => a.layer - b.layer)
+        .map((layer) => {
+          const isOpen = expandedLayers.has(layer.layer);
+          const layerEntries = entriesByLayer.get(layer.layer) || [];
+
+          // Compute working days from chosen_dates
+          const workDays = new Set<number>();
+          for (const e of layerEntries) {
+            const dd = e.totals?.duty_days || 1;
+            const start = e.chosen_dates?.[0] || e.operating_dates?.[0] || 0;
+            for (let d = start; d < start + dd; d++) workDays.add(d);
+          }
+
+          return (
+            <div key={layer.layer} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+              {/* Layer header — clickable */}
+              <button
+                onClick={() => toggleLayer(layer.layer)}
+                className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-gray-50 transition-colors"
+              >
+                <span className="w-7 h-7 rounded bg-blue-600 text-white text-xs font-bold flex items-center justify-center flex-shrink-0">
+                  {layer.layer}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-semibold text-gray-900">
+                    {LAYER_STRATEGIES[layer.layer] ?? `Layer ${layer.layer}`}
+                  </span>
+                  <span className="text-xs text-gray-500 ml-2">
+                    {layerEntries.length} trips &middot; {formatCreditHours(layer.credit_hours)} &middot;{' '}
+                    {30 - workDays.size} days off
+                  </span>
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold flex-shrink-0 ${holdabilityBg(layer.holdability_pct)}`}>
+                  {layer.holdability_pct}%
+                </span>
+                <span className="text-gray-400 text-xs flex-shrink-0">{isOpen ? '▾' : '▸'}</span>
+              </button>
+
+              {/* Expanded: mini calendar + trip cards */}
+              {isOpen && (
+                <div className="px-4 pb-4 border-t border-gray-100">
+                  {/* Mini calendar */}
+                  <div className="flex items-center gap-px py-3" aria-label="Calendar">
+                    {Array.from({ length: 30 }, (_, i) => i + 1).map(d => (
+                      <div
+                        key={d}
+                        className={`rounded-sm ${workDays.has(d) ? 'bg-blue-500' : 'bg-gray-200'}`}
+                        style={{ width: '4px', height: '14px' }}
+                        title={`Day ${d}: ${workDays.has(d) ? 'Working' : 'Off'}`}
+                      />
+                    ))}
+                    <span className="ml-2 text-[10px] text-gray-400">{workDays.size} work / {30 - workDays.size} off</span>
+                  </div>
+
+                  {/* Trip cards */}
+                  <div className="space-y-1">
+                    {layerEntries
+                      .sort((a, b) => a.rank - b.rank)
+                      .map(entry => (
+                        <TripCard key={entry.sequence_id + '-' + entry.layer} entry={entry} />
+                      ))
+                    }
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+    </div>
+  );
+}
+
 // --- Main Component ---
 
 export default function BuildBidStep({
@@ -545,80 +750,9 @@ export default function BuildBidStep({
         </button>
       </div>
 
-      {/* Detail View */}
+      {/* Detail View — expandable layers with trip cards */}
       {showDetails && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
-            Layer Details
-          </h3>
-          {buildResult.layer_summary
-            .slice()
-            .sort((a, b) => a.layer - b.layer)
-            .map((layer) => (
-              <div
-                key={layer.layer}
-                className="bg-white border border-gray-200 rounded-lg p-4 space-y-2"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="w-7 h-7 rounded bg-blue-600 text-white text-xs font-bold flex items-center justify-center">
-                      {layer.layer}
-                    </span>
-                    <div>
-                      <span className="text-sm font-semibold text-gray-900">
-                        {LAYER_STRATEGIES[layer.layer] ?? `Layer ${layer.layer}`}
-                      </span>
-                    </div>
-                  </div>
-                  <span
-                    className={`px-2.5 py-1 rounded-full text-xs font-semibold ${holdabilityBg(layer.holdability_pct)}`}
-                  >
-                    {layer.holdability_pct}% holdable
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4 pt-2 border-t border-gray-100">
-                  <div>
-                    <p className="text-xs text-gray-500">Sequences</p>
-                    <p className="text-sm font-semibold text-gray-800">
-                      {layer.sequences.toLocaleString()}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Pool Size</p>
-                    <div className="flex items-center gap-1.5">
-                      <p className="text-sm font-semibold text-gray-800">
-                        {layer.pool_size.toLocaleString()}
-                      </p>
-                      {poolHealthIcon(layer.pool_size)}
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Credit Hours</p>
-                    <p className="text-sm font-semibold text-gray-800">
-                      {formatCreditHours(layer.credit_hours)}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Holdability bar */}
-                <div className="pt-1">
-                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${
-                        layer.holdability_pct >= 80
-                          ? 'bg-green-500'
-                          : layer.holdability_pct >= 50
-                          ? 'bg-yellow-500'
-                          : 'bg-red-500'
-                      }`}
-                      style={{ width: `${Math.min(layer.holdability_pct, 100)}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-        </div>
+        <LayerDetailView buildResult={buildResult} />
       )}
 
       {/* Print View */}
