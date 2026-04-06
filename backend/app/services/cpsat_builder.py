@@ -51,13 +51,15 @@ STANDARD_WEIGHTS = {
 }
 
 # Commuter weights (auto-detected when base != mailbox/commute_from)
-# Report/release time weighted much higher — every bad time costs an off-day
+# Credit efficiency is the dominant signal: fewer high-TPAY trips = fewer
+# commute events = more days off.  Report/release still matter but cannot
+# override a meaningful credit gap.
 COMMUTER_WEIGHTS = {
-    "credit_efficiency": 0.25,
-    "layover_quality": 0.10,
+    "credit_efficiency": 0.35,
+    "layover_quality": 0.05,
     "layover_city": 0.10,
-    "report_time": 0.20,
-    "release_time": 0.15,
+    "report_time": 0.18,
+    "release_time": 0.12,
     "legs_per_day": 0.10,
     "red_eye_penalty": 0.05,
     "deadhead_penalty": 0.05,
@@ -214,10 +216,12 @@ def compute_trip_quality(seq: dict, *, is_commuter: bool = False) -> float:
     dps = seq.get("duty_periods", [])
     duty_days = totals.get("duty_days", 1) or 1
 
-    # 1. Credit efficiency (TPAY / duty day, normalized 100-500 → 0-100)
+    # 1. Credit efficiency (TPAY / duty day)
+    #    Realistic CPD for 3-day trips: 300-470 min (5h-7.8h).
+    #    Use range 250-450 → 0-100 so high-CPD trips score much higher.
     tpay = totals.get("tpay_minutes", 0)
     cpd = tpay / duty_days
-    credit_eff = min(100.0, max(0.0, (cpd - 100) / 4.0))
+    credit_eff = min(100.0, max(0.0, (cpd - 250) / 2.0))
 
     # 2. Layover quality — Gaussian centred on 24 h, SD = 8 h
     layover_scores: list[float] = []
