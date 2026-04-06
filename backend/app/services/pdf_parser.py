@@ -410,9 +410,17 @@ def _colon_time_to_minutes(t: str) -> int:
 def enrich_sequence_totals(seq: dict) -> None:
     """Compute CBA rig values and ensure TPAY reflects the CBA guarantee.
 
-    Fixes the uniform-TPAY problem: when the PDF's TPAY equals the flat
-    5h/duty-day guarantee, we recompute from actual block, duty rig, and
-    trip rig so the optimizer can differentiate trips of the same length.
+    The PDF often reports TPAY as the flat 5h/duty-day guarantee.  The real
+    CBA TPAY is computed **per duty period** first:
+
+        dp_tpay = max(dp_block, dp_duty_rig, 5h_guarantee)
+
+    then summed across DPs, then compared with trip rig:
+
+        total_tpay = max(sum_of_dp_tpays, trip_rig)
+
+    This per-DP calculation always produces a higher (correct) value because
+    heavy DPs (long block or long duty) are not averaged with light ones.
 
     Safe to call multiple times (idempotent).
     """
@@ -421,47 +429,58 @@ def enrich_sequence_totals(seq: dict) -> None:
     if not totals:
         return
 
-    block = totals.get("block_minutes", 0)
     tafb = totals.get("tafb_minutes", 0)
     duty_days = totals.get("duty_days", len(dps)) or len(dps) or 1
 
-    # ── Compute total on-duty minutes from per-DP data ──
+    # ── Per-DP TPAY computation (CBA §11.D) ──
+    dp_tpay_sum = 0
     on_duty_total = 0
+    dp_guarantee_per_dp = 5 * 60  # 300 minutes = 5 hours
+
     for dp in dps:
+        # Block for this DP
+        legs = dp.get("legs", [])
+        dp_block = sum(leg.get("block_minutes", 0) for leg in legs)
+
+        # Duty minutes for this DP
         dm = dp.get("duty_minutes", 0)
-        if dm:
-            on_duty_total += dm
-        else:
-            # Fallback: compute from report/release times
+        if not dm:
             rpt_str = dp.get("report_base", "")
             rls_str = dp.get("release_base", "")
             if rpt_str and rls_str and ":" in rpt_str and ":" in rls_str:
                 rpt = _colon_time_to_minutes(rpt_str)
                 rls = _colon_time_to_minutes(rls_str)
                 if rls > rpt:
-                    on_duty_total += rls - rpt
+                    dm = rls - rpt
                 elif rls < rpt:  # crosses midnight
-                    on_duty_total += (24 * 60 - rpt) + rls
+                    dm = (24 * 60 - rpt) + rls
+        on_duty_total += dm
 
-    # ── CBA rig calculations ──
-    # §2.P: duty rig = 1 hour per 2 hours on-duty
+        # §2.P: duty rig = 1 hour per 2 hours on-duty (per DP)
+        dp_duty_rig = dm // 2
+
+        # Per-DP TPAY: max of block, duty rig, and 5h guarantee
+        dp_tpay = max(dp_block, dp_duty_rig, dp_guarantee_per_dp)
+        dp_tpay_sum += dp_tpay
+
+    # ── Trip-level rigs ──
+    # §2.P: total duty rig (kept for reference)
     duty_rig = on_duty_total // 2 if on_duty_total else 0
     # §2.AAA: trip rig = 1 hour per 3.5 hours TAFB
     trip_rig = int(tafb / 3.5) if tafb else 0
-    # §11.D: minimum guarantee = 5 hours per duty period
-    dp_guarantee = 5 * 60 * duty_days
 
-    computed_tpay = max(block, duty_rig, trip_rig, dp_guarantee)
+    # Total TPAY: max of per-DP sum and trip rig
+    computed_tpay = max(dp_tpay_sum, trip_rig)
 
     totals["duty_rig_minutes"] = duty_rig
     totals["trip_rig_minutes"] = trip_rig
 
-    # Only adjust TPAY when it appears to be the flat 5h/day guarantee
-    # (or missing entirely).  This targets the uniform-TPAY problem without
-    # overriding intentionally varied TPAY values from the bid sheet.
+    # Always override when the computed value is higher than the parsed value.
+    # The PDF typically reports the flat 5h/day guarantee; the per-DP
+    # computation gives the actual (higher) CBA TPAY.
     parsed_tpay = totals.get("tpay_minutes", 0)
-    if parsed_tpay == 0 or parsed_tpay == dp_guarantee:
-        totals["tpay_minutes"] = max(parsed_tpay, computed_tpay)
+    if computed_tpay > parsed_tpay:
+        totals["tpay_minutes"] = computed_tpay
 
     seq["totals"] = totals
 
