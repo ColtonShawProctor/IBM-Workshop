@@ -113,49 +113,39 @@ def _hhmm_to_minutes(t: str) -> int:
 
 
 def _matches_criteria(seq: dict, criteria: GuidedCriteria) -> bool:
-    """Check if a sequence matches the guided criteria filters."""
+    """Hard-exclude only truly unwanted trips.
+
+    Only three things are hard excludes:
+      1. Avoided cities (hate cities)
+      2. Red-eyes / ODANs (if avoid_redeyes is set)
+      3. 1-day turns (too short to be useful)
+      4. Conflicts with requested days off
+
+    Everything else (trip length, preferred cities, report/release times,
+    legs per day) is a SCORING signal, not a filter.
+    """
     totals = seq.get("totals", {})
-    dps = seq.get("duty_periods", [])
 
-    # Trip length
-    if criteria.trip_lengths:
-        dd = totals.get("duty_days", 1) or 1
-        if dd not in criteria.trip_lengths:
-            return False
+    # Hard exclude: 1-day turns
+    dd = totals.get("duty_days", 1) or 1
+    if dd < 2:
+        return False
 
-    # Avoided cities
+    # Hard exclude: avoided cities
     if criteria.avoided_cities:
         cities = seq.get("layover_cities", [])
         if any(c in criteria.avoided_cities for c in cities):
             return False
 
-    # Preferred cities (at least one match, or turns with no layovers pass)
-    if criteria.preferred_cities:
-        cities = seq.get("layover_cities", [])
-        if cities and not any(c in criteria.preferred_cities for c in cities):
-            return False
-
-    # Report time
-    if criteria.report_earliest_minutes is not None and dps:
-        rpt = _hhmm_to_minutes(dps[0].get("report_base", "12:00"))
-        if rpt < criteria.report_earliest_minutes:
-            return False
-
-    # Release time
-    if criteria.release_latest_minutes is not None and dps:
-        rel = _hhmm_to_minutes(dps[-1].get("release_base", "18:00"))
-        if rel > criteria.release_latest_minutes:
-            return False
-
-    # Avoid redeyes
+    # Hard exclude: redeyes / ODANs
     if criteria.avoid_redeyes:
         if seq.get("is_redeye") or seq.get("is_odan"):
             return False
 
-    # Days off (exclude sequences operating on requested off days)
+    # Hard exclude: conflicts with requested days off
     if criteria.days_off:
         off_set = set(criteria.days_off)
-        duty_days = totals.get("duty_days", 1) or 1
+        duty_days = dd
         for start in seq.get("operating_dates", []):
             span = set(range(start, start + duty_days))
             if span & off_set:
@@ -165,82 +155,97 @@ def _matches_criteria(seq: dict, criteria: GuidedCriteria) -> bool:
 
 
 def _score_trip(seq: dict, criteria: GuidedCriteria, is_commuter: bool) -> tuple[float, list[str]]:
-    """Score a sequence against guided criteria. Returns (score, reasons)."""
+    """Score a sequence against guided criteria. Returns (score, reasons).
+
+    All preferences are scoring signals, not hard filters.
+    Preferred trips float to the top; less-preferred trips rank lower
+    but still appear in the list.
+    """
+    import math
+
     score = 0.0
     reasons: list[str] = []
     totals = seq.get("totals", {})
     dps = seq.get("duty_periods", [])
-
-    # Credit efficiency (0-30 points)
-    tpay = totals.get("tpay_minutes", 0)
     dd = totals.get("duty_days", 1) or 1
-    cpd = tpay / dd  # credit per duty day
-    credit_score = min(30.0, max(0.0, (cpd - 100) / 400 * 30))
+
+    # 1. Credit efficiency (0-30 points) — primary signal
+    tpay = totals.get("tpay_minutes", 0)
+    cpd = tpay / dd
+    credit_score = min(30.0, max(0.0, (cpd - 250) / 2.0 * 0.3))
     score += credit_score
     if cpd > 350:
-        reasons.append(f"{round(tpay/60, 1)}h credit in {dd} days = {round(cpd/60, 1)}h/day (above average)")
+        reasons.append(f"{round(tpay/60, 1)}h credit ({round(cpd/60, 1)}h/day)")
 
-    # Preferred city match (0-25 points)
+    # 2. Trip length preference (0-15 points) — soft boost for preferred lengths
+    if criteria.trip_lengths:
+        if dd in criteria.trip_lengths:
+            score += 15.0
+            reasons.append(f"{dd}-day trip (preferred)")
+        elif abs(dd - min(criteria.trip_lengths)) <= 1:
+            score += 8.0  # close to preferred
+        else:
+            score += 2.0  # not preferred but still in the list
+
+    # 3. Preferred city match (0-20 points) — soft boost, not a filter
     cities = seq.get("layover_cities", [])
     if criteria.preferred_cities and cities:
         matched = [c for c in cities if c in criteria.preferred_cities]
         if matched:
-            city_score = min(25.0, len(matched) / len(cities) * 25)
+            city_score = min(20.0, len(matched) / len(cities) * 20)
             score += city_score
-            if len(matched) == 1:
-                reasons.append(f"{matched[0]} — your favorite city")
-            else:
-                reasons.append(f"{', '.join(matched)} — cities you love")
+            reasons.append(f"{', '.join(matched)} (favorite)")
+        else:
+            score += 5.0  # non-preferred cities still get some points
+    elif not criteria.preferred_cities:
+        score += 10.0  # no preference = neutral
 
-    # Report time (0-20 points, commuter-weighted)
+    # 4. Report time (0-15 points) — commuter hotel model, not a cutoff
     if dps:
         rpt_min = _hhmm_to_minutes(dps[0].get("report_base", "12:00"))
         if is_commuter:
-            if rpt_min >= 720:
-                rpt_score = 20.0
-                reasons.append(f"Reports at {dps[0].get('report_base', '')} — easy same-day commute")
-            elif rpt_min >= 540:
-                rpt_score = 16.0
-                reasons.append(f"Reports at {dps[0].get('report_base', '')} — comfortable morning commute")
-            elif rpt_min >= 420:
-                rpt_score = 8.0
-            else:
+            if rpt_min >= 570:      # 09:30+ easy same-day
+                rpt_score = 15.0
+                reasons.append(f"Report {dps[0].get('report_base','')} (easy commute)")
+            elif rpt_min >= 480:    # 08:00-09:30 tight
+                rpt_score = 12.0
+            elif rpt_min >= 360:    # 06:00-08:00 hotel night
+                rpt_score = 6.0
+            else:                   # before 06:00
                 rpt_score = 2.0
         else:
-            rpt_score = min(20.0, max(0.0, (rpt_min - 300) / 420 * 20))
+            rpt_score = min(15.0, max(0.0, (rpt_min - 300) / 420 * 15))
         score += rpt_score
 
-    # Release time (0-15 points, commuter-weighted)
+    # 5. Release time (0-10 points) — gradient, not a cutoff
     if dps:
         rel_min = _hhmm_to_minutes(dps[-1].get("release_base", "18:00"))
         if is_commuter:
-            if rel_min <= 960:
-                rel_score = 15.0
-                reasons.append(f"Releases at {dps[-1].get('release_base', '')} — plenty of flights home")
-            elif rel_min <= 1140:
+            if rel_min <= 1080:     # by 18:00
                 rel_score = 10.0
-            elif rel_min <= 1260:
-                rel_score = 5.0
+                reasons.append(f"Release {dps[-1].get('release_base','')} (easy home)")
+            elif rel_min <= 1170:   # 18:00-19:30
+                rel_score = 7.0
+            elif rel_min <= 1260:   # 19:30-21:00
+                rel_score = 3.0
             else:
-                rel_score = 0.0
+                rel_score = 1.0
         else:
-            if rel_min <= 960:
-                rel_score = 15.0
-            elif rel_min <= 1140:
-                rel_score = 15.0 - (rel_min - 960) / 180 * 9
+            if rel_min <= 1080:
+                rel_score = 10.0
+            elif rel_min <= 1200:
+                rel_score = 10.0 - (rel_min - 1080) / 120 * 6
             else:
-                rel_score = max(0.0, 6.0 - (rel_min - 1140) / 180 * 6)
+                rel_score = max(0.0, 4.0 - (rel_min - 1200) / 180 * 4)
         score += rel_score
 
-    # Layover quality (0-10 points)
+    # 6. Layover quality (0-8 points)
     layover_scores = []
     for dp in dps:
         lo = dp.get("layover")
         if lo and lo.get("rest_minutes"):
             hours = lo["rest_minutes"] / 60.0
-            # Gaussian centered on 24h
-            import math
-            ls = 10.0 * math.exp(-((hours - 24) ** 2) / (2 * 64))
+            ls = 8.0 * math.exp(-((hours - 24) ** 2) / (2 * 64))
             layover_scores.append(ls)
     if layover_scores:
         avg_lo = sum(layover_scores) / len(layover_scores)
@@ -250,15 +255,19 @@ def _score_trip(seq: dict, criteria: GuidedCriteria, is_commuter: bool) -> tuple
             for dp in dps if dp.get("layover", {}).get("rest_minutes")
         ) / max(len(layover_scores), 1)
         if avg_hours >= 20:
-            reasons.append(f"{round(avg_hours, 0):.0f}h layovers — great rest time")
+            reasons.append(f"{round(avg_hours, 0):.0f}h layovers")
 
-    # Fewer legs bonus (0-5 points)
+    # 7. Legs per day (0-7 points) — 1-3 is fine, 4+ penalized
     total_legs = totals.get("leg_count", 0) or 0
     avg_legs = total_legs / dd if dd > 0 else 2.0
-    legs_score = max(0.0, 5.0 - (avg_legs - 1.0) * 2.5)
+    if avg_legs <= 3.0:
+        legs_score = 7.0 - (avg_legs - 1.0) * 0.5  # 1→7, 2→6.5, 3→6
+    elif avg_legs <= 4.0:
+        legs_score = 3.0  # 4 legs = noticeable penalty
+    else:
+        legs_score = 1.0  # 5+ legs = heavy penalty
+
     score += legs_score
-    if avg_legs <= 2.0:
-        reasons.append(f"Max {int(avg_legs)} legs per day")
 
     return round(score, 1), reasons
 

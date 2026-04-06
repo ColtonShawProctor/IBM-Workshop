@@ -240,7 +240,7 @@ export default function TripPickerStep({
               YOUR TOP TRIPS
             </h2>
             <p className="text-xs text-gray-500">
-              {totalMatching} trips match your preferences
+              {totalMatching} trips available — sorted by your preferences
             </p>
           </div>
           <div className="w-16" /> {/* spacer for centering */}
