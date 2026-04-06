@@ -129,7 +129,7 @@ async def auto_setup():
             "profile": {
                 "display_name": "Katya Johansen",
                 "base_city": "ORD",
-                "commute_from": "LGA",
+                "commute_from": "DCA",
                 "seniority_number": 1170,
                 "total_base_fas": 2323,
                 "seniority_percentage": 50.3,
@@ -148,10 +148,10 @@ async def auto_setup():
                 "tpay_min_minutes": 5100,     # 85 hours
                 "tpay_max_minutes": 5400,     # 90 hours
                 "preferred_equipment": [],
-                "report_earliest_minutes": 540,   # 09:00
+                "report_earliest_minutes": None,    # no hard cutoff — hotel model handles it
                 "report_latest_minutes": None,
                 "release_earliest_minutes": None,
-                "release_latest_minutes": 1140,   # 19:00
+                "release_latest_minutes": None,    # no hard cutoff — hotel model handles it
                 "avoid_redeyes": True,
                 "prefer_turns": None,
                 "prefer_high_ops": True,

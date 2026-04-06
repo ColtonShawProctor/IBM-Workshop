@@ -50,19 +50,27 @@ STANDARD_WEIGHTS = {
     "deadhead_penalty": 0.05,
 }
 
-# Commuter weights (auto-detected when base != mailbox/commute_from)
-# Credit efficiency is the dominant signal: fewer high-TPAY trips = fewer
-# commute events = more days off.  Report/release still matter but cannot
-# override a meaningful credit gap.
+# Commuter weights — hotel-based model.
+# Report/release are replaced by a single commute_cost dimension that
+# accounts for hotel nights at base.  An early report is a $100 problem
+# (one hotel night), not a schedule-ruining problem.
 COMMUTER_WEIGHTS = {
     "credit_efficiency": 0.35,
-    "layover_quality": 0.05,
-    "layover_city": 0.10,
-    "report_time": 0.18,
-    "release_time": 0.12,
+    "layover_quality": 0.10,
+    "layover_city": 0.15,
+    "commute_cost": 0.20,       # hotel nights + commute tightness
     "legs_per_day": 0.10,
     "red_eye_penalty": 0.05,
     "deadhead_penalty": 0.05,
+}
+
+# DCA↔ORD commute parameters (data-driven from AA schedules)
+COMMUTE_INFO = {
+    "same_day_report_cutoff": 480,    # 08:00 Central — earliest same-day from DCA
+    "comfortable_report": 570,         # 09:30 Central — comfortable same-day
+    "same_day_release_cutoff": 1170,   # 19:30 Central — latest to catch ORD→DCA
+    "comfortable_release": 1080,       # 18:00 Central — multiple flight options
+    "hotel_cost": 100,                 # estimated nightly cost
 }
 
 # Layover city desirability tiers (0-100)
@@ -204,12 +212,51 @@ def _hhmm_to_minutes(t: str) -> int:
 
 # ── Trip Quality Scoring ─────────────────────────────────────────────────
 
+def _score_commute_cost(seq: dict) -> float:
+    """Score a trip's commute cost (0-100) using hotel-night model.
+
+    An early report or late release means a hotel night at base — a $100
+    cost, not a dealbreaker.  This replaces hard report/release cutoffs.
+
+    100 = no hotel needed (easy same-day commute both ways)
+     75 = 1 hotel night (early report OR late release)
+     50 = 2 hotel nights (early report AND late release)
+    """
+    ci = COMMUTE_INFO
+    dps = seq.get("duty_periods", [])
+    if not dps:
+        return 50.0
+
+    hotel_nights = 0
+
+    # Report time of first DP
+    rpt_min = _hhmm_to_minutes(dps[0].get("report_base", "12:00"))
+    if rpt_min < ci["same_day_report_cutoff"]:      # before 08:00
+        hotel_nights += 1  # must fly in night before
+    elif rpt_min < ci["comfortable_report"]:          # 08:00-09:30
+        hotel_nights += 0  # tight but possible same-day
+    # else: easy same-day
+
+    # Release time of last DP
+    rel_min = _hhmm_to_minutes(dps[-1].get("release_base", "18:00"))
+    if rel_min > ci["same_day_release_cutoff"]:       # after 19:30
+        hotel_nights += 1  # no good flights home
+    elif rel_min > ci["comfortable_release"]:          # 18:00-19:30
+        hotel_nights += 0  # tight but catchable
+    # else: easy same-day home
+
+    return max(0.0, 100.0 - hotel_nights * 25.0)
+
+
 def compute_trip_quality(seq: dict, *, is_commuter: bool = False) -> float:
     """Compute composite trip quality score (0.0-1.0) for a sequence.
 
-    Eight dimensions, weighted by COMMUTER_WEIGHTS or STANDARD_WEIGHTS.
-    Commuter detection is automatic: if base != mailbox, commuter weights
-    are applied (report/release time weighted 20%/15% instead of 10%/10%).
+    For commuters: uses hotel-based commute_cost instead of hard
+    report/release cutoffs.  An early report is a $100 problem (one hotel
+    night), not a schedule-ruining problem.  High-TPAY trips with early
+    reports are still worth picking.
+
+    For non-commuters: uses standard report/release time preferences.
     """
     w = COMMUTER_WEIGHTS if is_commuter else STANDARD_WEIGHTS
     totals = seq.get("totals", {})
@@ -217,8 +264,6 @@ def compute_trip_quality(seq: dict, *, is_commuter: bool = False) -> float:
     duty_days = totals.get("duty_days", 1) or 1
 
     # 1. Credit efficiency (TPAY / duty day)
-    #    Realistic CPD for 3-day trips: 300-470 min (5h-7.8h).
-    #    Use range 250-450 → 0-100 so high-CPD trips score much higher.
     tpay = totals.get("tpay_minutes", 0)
     cpd = tpay / duty_days
     credit_eff = min(100.0, max(0.0, (cpd - 250) / 2.0))
@@ -239,32 +284,39 @@ def compute_trip_quality(seq: dict, *, is_commuter: bool = False) -> float:
     else:
         avg_city = 50.0
 
-    # 4. Report time (linear ramp: 05:00 → 0, 12:00+ → 100)
-    if dps:
-        rpt_min = _hhmm_to_minutes(dps[0].get("report_base", "12:00"))
-        if rpt_min >= 720:
-            report_score = 100.0
-        elif rpt_min <= 300:
-            report_score = 0.0
+    # 4 & 5. Commuter: single commute_cost dimension.
+    #         Non-commuter: separate report_time + release_time.
+    if is_commuter:
+        commute_score = _score_commute_cost(seq)
+        # For non-commuter dimensions, set to 0 (unused)
+        report_score = 0.0
+        release_score = 0.0
+    else:
+        commute_score = 0.0
+        # Standard report time scoring
+        if dps:
+            rpt_min = _hhmm_to_minutes(dps[0].get("report_base", "12:00"))
+            if rpt_min >= 720:
+                report_score = 100.0
+            elif rpt_min <= 300:
+                report_score = 0.0
+            else:
+                report_score = (rpt_min - 300) / 420.0 * 100.0
         else:
-            report_score = (rpt_min - 300) / 420.0 * 100.0
-    else:
-        report_score = 50.0
-
-    # 5. Release time (earlier = better for commuting home)
-    #    Before 16:00 = 100, 16:00-19:00 = linear 100→40, 19:00-22:00 = linear 40→0, after 22:00 = 0
-    if dps:
-        rel_min = _hhmm_to_minutes(dps[-1].get("release_base", "18:00"))
-        if rel_min <= 960:       # before 16:00
-            release_score = 100.0
-        elif rel_min <= 1140:    # 16:00-19:00
-            release_score = 100.0 - (rel_min - 960) / 180.0 * 60.0
-        elif rel_min <= 1320:    # 19:00-22:00
-            release_score = 40.0 - (rel_min - 1140) / 180.0 * 40.0
-        else:                    # after 22:00
-            release_score = 0.0
-    else:
-        release_score = 50.0
+            report_score = 50.0
+        # Standard release time scoring
+        if dps:
+            rel_min = _hhmm_to_minutes(dps[-1].get("release_base", "18:00"))
+            if rel_min <= 960:
+                release_score = 100.0
+            elif rel_min <= 1140:
+                release_score = 100.0 - (rel_min - 960) / 180.0 * 60.0
+            elif rel_min <= 1320:
+                release_score = 40.0 - (rel_min - 1140) / 180.0 * 40.0
+            else:
+                release_score = 0.0
+        else:
+            release_score = 50.0
 
     # 6. Legs per duty day
     total_legs = totals.get("leg_count", 0) or 0
@@ -286,17 +338,114 @@ def compute_trip_quality(seq: dict, *, is_commuter: bool = False) -> float:
     total_leg = totals.get("leg_count", 1) or 1
     dh_score = max(0.0, 100.0 * (1.0 - dh / total_leg))
 
-    composite = (
-        w["credit_efficiency"] * credit_eff
-        + w["layover_quality"] * avg_layover
-        + w["layover_city"] * avg_city
-        + w["report_time"] * report_score
-        + w["release_time"] * release_score
-        + w["legs_per_day"] * legs_score
-        + w["red_eye_penalty"] * redeye
-        + w["deadhead_penalty"] * dh_score
-    )
+    # Build composite from whichever weight set we're using
+    composite = w["credit_efficiency"] * credit_eff
+    composite += w["layover_quality"] * avg_layover
+    composite += w["layover_city"] * avg_city
+    composite += w.get("commute_cost", 0) * commute_score
+    composite += w.get("report_time", 0) * report_score
+    composite += w.get("release_time", 0) * release_score
+    composite += w["legs_per_day"] * legs_score
+    composite += w.get("red_eye_penalty", 0) * redeye
+    composite += w["deadhead_penalty"] * dh_score
+
     return composite / 100.0  # normalise to 0.0-1.0
+
+
+def analyze_schedule_commute(
+    selected_sequences: list[dict],
+    total_dates: int = 30,
+) -> dict:
+    """Compute total commute cost for a complete schedule.
+
+    Groups trips into work blocks and counts commute flights + hotel nights.
+    Back-to-back trips in the same block share commute flights.
+    """
+    ci = COMMUTE_INFO
+    if not selected_sequences:
+        return {"work_blocks": 0, "commute_flights": 0, "hotel_nights": 0,
+                "estimated_hotel_cost": 0, "details": [], "summary": "No trips selected"}
+
+    # Build work blocks: groups of trips with <= 1 day gap between them
+    trips = []
+    for seq in selected_sequences:
+        chosen = seq.get("_chosen_span", set())
+        if not chosen:
+            ops = seq.get("operating_dates", [])
+            dd = seq.get("totals", {}).get("duty_days", 1) or 1
+            if ops:
+                chosen = set(range(ops[0], ops[0] + dd))
+        if chosen:
+            trips.append({
+                "seq": seq,
+                "start": min(chosen),
+                "end": max(chosen),
+                "report_min": _hhmm_to_minutes(
+                    seq.get("duty_periods", [{}])[0].get("report_base", "12:00")
+                ),
+                "release_min": _hhmm_to_minutes(
+                    seq.get("duty_periods", [{}])[-1].get("release_base", "18:00")
+                ) if seq.get("duty_periods") else 1080,
+            })
+
+    trips.sort(key=lambda t: t["start"])
+
+    # Group into blocks (gap <= 2 days = same block, hotel between)
+    blocks: list[list[dict]] = []
+    current_block: list[dict] = []
+    for trip in trips:
+        if current_block and trip["start"] - current_block[-1]["end"] > 3:
+            blocks.append(current_block)
+            current_block = [trip]
+        else:
+            current_block.append(trip)
+    if current_block:
+        blocks.append(current_block)
+
+    total_hotel = 0
+    total_flights = len(blocks) * 2  # 1 in + 1 home per block
+    details = []
+
+    for bi, block in enumerate(blocks):
+        # Hotel before first trip?
+        first = block[0]
+        if first["report_min"] < ci["same_day_report_cutoff"]:
+            total_hotel += 1
+            details.append(
+                f"Block {bi+1}: hotel night before (report "
+                f"{first['report_min']//60:02d}:{first['report_min']%60:02d})"
+            )
+
+        # Hotel nights between trips in this block
+        for i in range(len(block) - 1):
+            gap = block[i + 1]["start"] - block[i]["end"] - 1
+            if 0 < gap <= 2:
+                total_hotel += gap
+                details.append(
+                    f"Block {bi+1}: {gap} hotel night(s) between trips"
+                )
+
+        # Hotel after last trip?
+        last = block[-1]
+        if last["release_min"] > ci["same_day_release_cutoff"]:
+            total_hotel += 1
+            details.append(
+                f"Block {bi+1}: hotel night after (release "
+                f"{last['release_min']//60:02d}:{last['release_min']%60:02d})"
+            )
+
+    cost = total_hotel * ci["hotel_cost"]
+    return {
+        "work_blocks": len(blocks),
+        "commute_flights": total_flights,
+        "hotel_nights": total_hotel,
+        "estimated_hotel_cost": cost,
+        "details": details,
+        "summary": (
+            f"{len(blocks)} work block(s), {total_flights} commute flights (DCA-ORD), "
+            f"{total_hotel} hotel night(s) (~${cost})"
+        ),
+    }
 
 
 # ── CP-SAT Layer Builder ─────────────────────────────────────────────────
