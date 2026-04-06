@@ -12,23 +12,13 @@ interface BuildBidStepProps {
 }
 
 const LAYER_STRATEGIES: Record<number, string> = {
-  1: 'Dream Schedule',
+  1: 'Best Domestic',
   2: 'Your Picks',
-  3: 'Generic Properties',
+  3: 'Generic Match',
   4: 'Wider Pool',
   5: 'Broader',
   6: 'Broad Domestic',
   7: 'Safety Net',
-};
-
-const LAYER_DESCRIPTIONS: Record<number, string> = {
-  1: 'Dream schedule from full pool',
-  2: 'Your specific pairings',
-  3: 'Building from generic pairings...',
-  4: 'Waiting...',
-  5: 'Waiting...',
-  6: 'Waiting...',
-  7: 'Waiting...',
 };
 
 function holdabilityColor(pct: number): string {
@@ -162,33 +152,51 @@ function LoadingState({ selectedCount }: { selectedCount: number }) {
 
 function PrintView({
   buildResult,
-  criteria,
-  selectedIds,
+  shiftLayers,
 }: {
   buildResult: GuidedBuildResult;
-  criteria: GuidedCriteria;
-  selectedIds: string[];
+  shiftLayers: boolean;
 }) {
-  // Extract sequence numbers from entries for L2 display
-  const l2SeqNumbers = buildResult.entries
-    .filter((e) => (e as Record<string, unknown>).layer === 2)
-    .map((e) => (e as Record<string, unknown>).seq_number)
-    .filter(Boolean);
+  const LAYER_COLORS = ['blue', 'indigo', 'purple', 'pink', 'orange', 'amber', 'red'];
 
-  const formatDaysOff = (days: number[]) =>
-    days.length > 0 ? days.map((d) => `Day ${d}`).join(', ') : 'None specified';
+  // Group entries by optimizer layer and extract seq numbers
+  const seqsByLayer: Record<number, number[]> = {};
+  for (const e of buildResult.entries) {
+    const l = e.layer || 0;
+    if (!seqsByLayer[l]) seqsByLayer[l] = [];
+    if (e.seq_number && !seqsByLayer[l].includes(e.seq_number)) {
+      seqsByLayer[l].push(e.seq_number);
+    }
+  }
 
-  const formatTripLengths = (lengths: number[]) =>
-    lengths.length > 0 ? lengths.map((l) => `${l}-day`).join(', ') : 'Any';
+  // Build the PBS layer list
+  const pbsLayers: { pbsNum: number; optLayer: number | null; name: string; seqs: number[]; description: string }[] = [];
 
-  const formatTime = (minutes: number | null) => {
-    if (minutes === null) return 'Any';
-    const h = Math.floor(minutes / 60);
-    const m = minutes % 60;
-    const period = h >= 12 ? 'PM' : 'AM';
-    const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-    return `${hour12}:${m.toString().padStart(2, '0')} ${period}`;
-  };
+  if (shiftLayers) {
+    pbsLayers.push({
+      pbsNum: 1, optLayer: null,
+      name: 'Your International Lottery',
+      seqs: [],
+      description: 'Enter your London/NRT/international trips manually at fapbs.aa.com.',
+    });
+    for (let i = 1; i <= 6; i++) {
+      pbsLayers.push({
+        pbsNum: i + 1, optLayer: i,
+        name: LAYER_STRATEGIES[i] || `Layer ${i}`,
+        seqs: seqsByLayer[i] || [],
+        description: `Optimizer Layer ${i} sequences.`,
+      });
+    }
+  } else {
+    for (let i = 1; i <= 7; i++) {
+      pbsLayers.push({
+        pbsNum: i, optLayer: i,
+        name: LAYER_STRATEGIES[i] || `Layer ${i}`,
+        seqs: seqsByLayer[i] || [],
+        description: `Optimizer Layer ${i} sequences.`,
+      });
+    }
+  }
 
   return (
     <div className="print-view bg-white rounded-lg border border-gray-200 p-6">
@@ -197,13 +205,8 @@ function PrintView({
           body * { visibility: hidden; }
           .print-view, .print-view * { visibility: visible; }
           .print-view {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            border: none !important;
-            box-shadow: none !important;
-            padding: 20px !important;
+            position: absolute; left: 0; top: 0; width: 100%;
+            border: none !important; box-shadow: none !important; padding: 20px !important;
           }
           .no-print { display: none !important; }
         }
@@ -211,99 +214,44 @@ function PrintView({
 
       <div className="text-center mb-6 pb-4 border-b-2 border-gray-900">
         <h1 className="text-2xl font-bold text-gray-900 tracking-wide uppercase">
-          Your PBS Bid
+          PBS Bid Instructions
         </h1>
         <p className="text-sm text-gray-500 mt-1">
-          Bid ID: {buildResult.bid_id} | {buildResult.total_entries} total entries
+          Enter these layers top-to-bottom at fapbs.aa.com
         </p>
+        {shiftLayers && (
+          <p className="text-xs text-purple-600 mt-1 font-medium">
+            Layer 1 = your international lottery (entered manually) | Layers 2-7 = optimizer output
+          </p>
+        )}
       </div>
 
-      <div className="space-y-5">
-        {/* Layer 1 */}
-        <div className="border-l-4 border-blue-500 pl-4">
-          <h3 className="text-sm font-bold text-gray-900">Layer 1: Dream Schedule</h3>
-          <p className="text-sm text-gray-600 mt-1">
-            This layer bids your ideal schedule from the entire pool. At fapbs.aa.com, create a new
-            bid group with the following Pairing Tab properties:
-          </p>
-          <ul className="mt-2 text-sm text-gray-700 space-y-1 list-disc list-inside">
-            <li>Trip length: {formatTripLengths(criteria.trip_lengths)}</li>
-            {criteria.preferred_cities.length > 0 && (
-              <li>Preferred cities: {criteria.preferred_cities.join(', ')}</li>
-            )}
-            {criteria.avoided_cities.length > 0 && (
-              <li>Avoid cities: {criteria.avoided_cities.join(', ')}</li>
-            )}
-            <li>Report no earlier than: {formatTime(criteria.report_earliest_minutes)}</li>
-            <li>Release no later than: {formatTime(criteria.release_latest_minutes)}</li>
-            <li>Credit range: {formatCreditHours(criteria.credit_min_minutes / 60)} - {formatCreditHours(criteria.credit_max_minutes / 60)}</li>
-            {criteria.days_off.length > 0 && <li>Days off: {formatDaysOff(criteria.days_off)}</li>}
-            {criteria.avoid_redeyes && <li>Avoid red-eyes: Yes</li>}
-          </ul>
-        </div>
+      <div className="space-y-4">
+        {pbsLayers.map((pl, idx) => {
+          const color = LAYER_COLORS[idx] || 'gray';
+          const isManual = pl.optLayer === null;
 
-        {/* Layer 2 */}
-        <div className="border-l-4 border-indigo-500 pl-4">
-          <h3 className="text-sm font-bold text-gray-900">Layer 2: Your Picks</h3>
-          <p className="text-sm text-gray-600 mt-1">
-            Add these specific pairings by sequence number at fapbs.aa.com:
-          </p>
-          <p className="mt-2 text-sm font-mono bg-gray-50 rounded px-3 py-2 text-gray-800">
-            {l2SeqNumbers.length > 0 ? l2SeqNumbers.join(', ') : `(${selectedIds.length} sequences selected)`}
-          </p>
-        </div>
-
-        {/* Layer 3 */}
-        <div className="border-l-4 border-purple-500 pl-4">
-          <h3 className="text-sm font-bold text-gray-900">Layer 3: Generic Properties</h3>
-          <p className="text-sm text-gray-600 mt-1">
-            Set these PROPERTIES on the Pairing Tab to match similar pairings:
-          </p>
-          <ul className="mt-2 text-sm text-gray-700 space-y-1 list-disc list-inside">
-            <li>Trip length: {formatTripLengths(criteria.trip_lengths)}</li>
-            {criteria.preferred_cities.length > 0 && (
-              <li>Cities: {criteria.preferred_cities.join(', ')}</li>
-            )}
-            <li>Credit range: {formatCreditHours(criteria.credit_min_minutes / 60)} - {formatCreditHours(criteria.credit_max_minutes / 60)}</li>
-            {criteria.avoid_redeyes && <li>No red-eyes</li>}
-          </ul>
-        </div>
-
-        {/* Layer 4 */}
-        <div className="border-l-4 border-pink-500 pl-4">
-          <h3 className="text-sm font-bold text-gray-900">Layer 4: Wider Pool</h3>
-          <p className="text-sm text-gray-600 mt-1">
-            Widen by adding more trip lengths. Remove the report/release time filters if set.
-            Keep city preferences and credit range.
-          </p>
-        </div>
-
-        {/* Layer 5 */}
-        <div className="border-l-4 border-orange-500 pl-4">
-          <h3 className="text-sm font-bold text-gray-900">Layer 5: Broader</h3>
-          <p className="text-sm text-gray-600 mt-1">
-            Widen by adding any trip length. Remove the city preference filter.
-            Keep only the credit range and days-off constraints.
-          </p>
-        </div>
-
-        {/* Layer 6 */}
-        <div className="border-l-4 border-amber-500 pl-4">
-          <h3 className="text-sm font-bold text-gray-900">Layer 6: Broad Domestic</h3>
-          <p className="text-sm text-gray-600 mt-1">
-            Remove the credit range filter. Keep only days-off if specified.
-            This layer captures a wide domestic pool.
-          </p>
-        </div>
-
-        {/* Layer 7 */}
-        <div className="border-l-4 border-red-500 pl-4">
-          <h3 className="text-sm font-bold text-gray-900">Layer 7: Safety Net</h3>
-          <p className="text-sm text-gray-600 mt-1">
-            Remove ALL filters. This is your safety net -- it bids on every available pairing so
-            you are guaranteed an award rather than being assigned a reserve line.
-          </p>
-        </div>
+          return (
+            <div key={pl.pbsNum} className={`border-l-4 border-${color}-500 pl-4`} style={{ borderLeftColor: isManual ? '#9333ea' : undefined }}>
+              <h3 className="text-sm font-bold text-gray-900">
+                PBS Layer {pl.pbsNum}: {pl.name}
+                {pl.optLayer && <span className="text-xs text-gray-400 font-normal ml-2">(optimizer L{pl.optLayer})</span>}
+              </h3>
+              {isManual ? (
+                <p className="text-sm text-purple-700 mt-1 italic">{pl.description}</p>
+              ) : pl.seqs.length > 0 ? (
+                <div className="mt-1">
+                  <p className="text-xs text-gray-500 mb-1">Add these sequences at fapbs.aa.com:</p>
+                  <p className="text-sm font-mono bg-gray-50 rounded px-3 py-2 text-gray-800">
+                    {pl.seqs.join(', ')}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500 mt-1">{pl.description}</p>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <div className="mt-6 pt-4 border-t text-xs text-gray-400 text-center">
@@ -541,6 +489,7 @@ export default function BuildBidStep({
 }: BuildBidStepProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [showPrint, setShowPrint] = useState(false);
+  const [shiftLayers, setShiftLayers] = useState(false); // true = "I'll enter my own L1"
 
   // Find the most likely award layer: first layer with holdability >= 70%
   const likelyAwardLayer = useMemo(() => {
@@ -602,6 +551,41 @@ export default function BuildBidStep({
         </p>
       </div>
 
+      {/* PBS Layer Mapping Toggle */}
+      <div className="bg-white border border-gray-200 rounded-lg p-4">
+        <p className="text-sm font-medium text-gray-700 mb-3">
+          How are you using Layer 1 at fapbs.aa.com?
+        </p>
+        <div className="space-y-2">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="radio"
+              name="layerMapping"
+              checked={!shiftLayers}
+              onChange={() => setShiftLayers(false)}
+              className="mt-0.5 text-blue-600"
+            />
+            <div>
+              <span className="text-sm text-gray-800 font-medium">Use optimizer output as my PBS Layer 1</span>
+              <span className="text-xs text-gray-500 block">Direct mapping — optimizer L1 = PBS L1</span>
+            </div>
+          </label>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="radio"
+              name="layerMapping"
+              checked={shiftLayers}
+              onChange={() => setShiftLayers(true)}
+              className="mt-0.5 text-blue-600"
+            />
+            <div>
+              <span className="text-sm text-gray-800 font-medium">I'll enter my own L1 (London/international)</span>
+              <span className="text-xs text-gray-500 block">Shift optimizer layers to PBS L2–L7</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
       {/* Layer Summary Table */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
@@ -626,10 +610,31 @@ export default function BuildBidStep({
               </tr>
             </thead>
             <tbody>
+              {/* If shifted, show the manual L1 row first */}
+              {shiftLayers && (
+                <tr className="border-b border-gray-100 bg-purple-50">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded bg-purple-600 text-white text-xs font-bold flex items-center justify-center">
+                        1
+                      </span>
+                      <span className="text-xs text-purple-600 font-medium">PBS</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-purple-700 font-medium italic">
+                    Your London/NRT trips (enter manually)
+                  </td>
+                  <td className="px-4 py-3 text-right text-purple-400">—</td>
+                  <td className="px-4 py-3 text-right text-purple-400">—</td>
+                  <td className="px-4 py-3 text-right text-purple-400">—</td>
+                </tr>
+              )}
               {buildResult.layer_summary
                 .slice()
                 .sort((a, b) => a.layer - b.layer)
+                .filter((layer) => !shiftLayers || layer.layer <= 6) // drop L7 when shifted
                 .map((layer) => {
+                  const pbsLayer = shiftLayers ? layer.layer + 1 : layer.layer;
                   const isLikelyAward = likelyAwardLayer?.layer === layer.layer;
 
                   return (
@@ -642,12 +647,15 @@ export default function BuildBidStep({
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <span className="w-6 h-6 rounded bg-blue-600 text-white text-xs font-bold flex items-center justify-center">
-                            {layer.layer}
+                            {pbsLayer}
                           </span>
                           {isLikelyAward && (
                             <span className="text-xs bg-green-600 text-white px-1.5 py-0.5 rounded-full font-medium">
                               Likely
                             </span>
+                          )}
+                          {shiftLayers && (
+                            <span className="text-[10px] text-gray-400">opt L{layer.layer}</span>
                           )}
                         </div>
                       </td>
@@ -759,8 +767,7 @@ export default function BuildBidStep({
       {showPrint && (
         <PrintView
           buildResult={buildResult}
-          criteria={criteria}
-          selectedIds={selectedIds}
+          shiftLayers={shiftLayers}
         />
       )}
     </div>

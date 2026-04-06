@@ -126,6 +126,10 @@ def _matches_criteria(seq: dict, criteria: GuidedCriteria) -> bool:
     """
     totals = seq.get("totals", {})
 
+    # Hard exclude: international trips (domestic only in guided flow)
+    if not seq.get("is_domestic", True):
+        return False
+
     # Hard exclude: 1-day turns
     dd = totals.get("duty_days", 1) or 1
     if dd < 2:
