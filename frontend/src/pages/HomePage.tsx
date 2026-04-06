@@ -58,13 +58,49 @@ export default function HomePage() {
     setUploading(true);
     setError('');
     try {
+      // Auto-detect month from filename or use current month
+      const now = new Date();
+      let year = now.getFullYear();
+      let month = now.getMonth(); // 0-indexed
+
+      // Try to extract from filename like "ORDSEQ2601.pdf" or "ORD-JAN26.pdf"
+      const fname = file.name.toUpperCase();
+      const seqMatch = fname.match(/SEQ(\d{2})(\d{2})/);
+      const monthNames: Record<string, number> = {
+        JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5,
+        JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11,
+      };
+      const nameMatch = fname.match(/(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})/);
+
+      if (seqMatch) {
+        year = 2000 + parseInt(seqMatch[1]);
+        month = parseInt(seqMatch[2]) - 1;
+      } else if (nameMatch) {
+        year = 2000 + parseInt(nameMatch[2]);
+        month = monthNames[nameMatch[1]];
+      }
+
+      const start = new Date(year, month, 1);
+      const end = new Date(year, month + 1, 0); // last day of month
+      const monthLabel = start.toLocaleString('default', { month: 'long', year: 'numeric' });
+
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('name', monthLabel);
+      formData.append('effective_start', start.toISOString().slice(0, 10));
+      formData.append('effective_end', end.toISOString().slice(0, 10));
+      formData.append('target_credit_min_minutes', '5100');
+      formData.append('target_credit_max_minutes', '5400');
+
       const bp = await createBidPeriod(formData);
       // Go directly to the guided bid flow
       navigate(`/bid-periods/${bp.id}/guided`);
     } catch (err: any) {
-      setError(err?.response?.data?.message || err?.message || 'Upload failed. Check the file and try again.');
+      const detail = err?.response?.data?.detail;
+      const msg = typeof detail === 'string' ? detail
+        : Array.isArray(detail) ? detail.map((d: any) => d.msg).join(', ')
+        : err?.message || 'Upload failed. Check the file and try again.';
+      setError(msg);
       setUploading(false);
     }
   }
