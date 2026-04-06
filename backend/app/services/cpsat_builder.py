@@ -318,17 +318,15 @@ def compute_trip_quality(seq: dict, *, is_commuter: bool = False) -> float:
         else:
             release_score = 50.0
 
-    # 6. Legs per duty day
+    # 6. Legs per duty day — 1-3 legs is normal, 4+ is high-fatigue
     total_legs = totals.get("leg_count", 0) or 0
     avg_legs = total_legs / duty_days if duty_days > 0 else 2.0
-    if avg_legs <= 1.0:
-        legs_score = 100.0
-    elif avg_legs <= 2.0:
-        legs_score = 100.0 - (avg_legs - 1.0) * 20.0
-    elif avg_legs <= 3.0:
-        legs_score = 80.0 - (avg_legs - 2.0) * 30.0
+    if avg_legs <= 3.0:
+        legs_score = 100.0 - (avg_legs - 1.0) * 5.0  # 1→100, 2→95, 3→90
+    elif avg_legs <= 4.0:
+        legs_score = 90.0 - (avg_legs - 3.0) * 50.0   # 3→90, 4→40
     else:
-        legs_score = max(20.0, 50.0 - (avg_legs - 3.0) * 30.0)
+        legs_score = max(10.0, 40.0 - (avg_legs - 4.0) * 20.0)  # 4+→steep drop
 
     # 7. Red-eye / ODAN penalty
     redeye = 0.0 if (seq.get("is_redeye") or seq.get("is_odan")) else 100.0
