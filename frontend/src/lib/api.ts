@@ -134,6 +134,11 @@ export async function login(email: string, password: string): Promise<AuthRespon
   return res.data;
 }
 
+export async function autoSetup(): Promise<AuthResponse> {
+  const res = await api.post('/auth/auto-setup');
+  return res.data;
+}
+
 // ── Users ───────────────────────────────────────────────────────────────
 
 export async function getMe(): Promise<User> {

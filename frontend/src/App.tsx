@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './context/AuthContext';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
+import HomePage from './pages/HomePage';
+import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
@@ -30,13 +32,17 @@ export default function App() {
       <AuthProvider>
         <BrowserRouter>
           <Routes>
-            {/* Public routes */}
+            {/* Zero-config home — auto-setup, upload, go */}
+            <Route path="/" element={<HomePage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+
+            {/* Legacy auth routes */}
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
 
-            {/* Protected routes */}
+            {/* Protected routes with full nav layout */}
             <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-              <Route path="/" element={<DashboardPage />} />
+              <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/profile" element={<ProfilePage />} />
               <Route path="/history" element={<BidHistoryPage />} />
               <Route path="/glossary" element={<GlossaryPage />} />
